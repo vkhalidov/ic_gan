@@ -286,26 +286,54 @@ def calculate_inception_score(pred, num_splits=10):
 # Loop and run the sampler and the net until it accumulates num_inception_images
 # activations. Return the pool, the logits, and the labels (if one wants
 # Inception Accuracy the labels of the generated class will be needed)
-def accumulate_inception_activations(sample, net, num_inception_images=50000, model_backbone='biggan'):
-    pool, logits, labels = [], [], []
-    while (torch.cat(logits, 0).shape[0] if len(logits) else 0) < num_inception_images:
+def accumulate_inception_activations(sample, net, num_inception_images=50000, model_backbone='biggan', num_logs=10):
+    pool, logits, labels = None, None, None
+    offset = 0
+    print(f"Accumulating {num_inception_images} inception activations...")
+    t1 = time.perf_counter()
+    log_points = list(range(num_inception_images // num_logs, num_inception_images, num_inception_images // num_logs))
+    next_log_point_idx = 0
+    while offset < num_inception_images:
         with torch.no_grad():
-            images, labels_val, _ = sample()
+            images, labels_val, _, _= sample()
             if model_backbone == 'stylegan2':
                 images = torch.clamp((images * 127.5 + 128), 0, 255)
                 images = ((images / 255) - 0.5) * 2
             if labels_val is not None:
-                labels_val = labels_val.long()
+                labels_val = labels_val.long().cpu()
             pool_val, logits_val = net(images.float())
-            pool += [pool_val]
-            logits += [F.softmax(logits_val, 1)]
-            labels += [labels_val]
+            logits_val = F.softmax(logits_val, 1).cpu()
+            if pool is None:
+                pool = torch.empty((num_inception_images, pool_val.shape[1]), dtype=torch.float32)
+                logits = torch.empty((num_inception_images, logits_val.shape[1]), dtype=torch.float32)
+                labels = torch.zeros(num_inception_images, dtype=torch.int64)
+            batch_size = pool_val.shape[0]
+            assert batch_size == logits_val.shape[0], f"pool shape {pool_val.shape}, logits shape {logits.shape}"
+            assign_size = min(batch_size, num_inception_images - offset)
+            pool[offset : offset + assign_size] = pool_val.cpu()[:assign_size]
+            logits[offset : offset + assign_size] = logits_val[:assign_size]
+            if labels_val is not None:
+                assert batch_size == labels_val.shape[0], f"pool shape {pool_val.shape}, labels shape {labels_val.shape}"
+                labels[offset : offset + assign_size] = labels_val[:assign_size]
+            #pool.append(pool_val.cpu())
+            #logits.append(logits_val)
+            #labels.append(labels_val)
+            offset += assign_size
+            #sample_count += logits_val.shape[0]
+            if next_log_point_idx < len(log_points) and log_points[next_log_point_idx] <= offset:
+                next_log_point_idx += 1
+                t2 = time.perf_counter()
+                eta_s = (t2-t1) * num_inception_images / offset
+                print(f"Accumulated {offset}/{num_inception_images} activations in {t2-t1}s (ETA:{str(datetime.timedelta(seconds=eta_s))}s)")
+            #print(f"Added {assign_size}/{batch_size} samples; logits ({logits_val.shape}, {logits_val.dtype}, {logits_val.device}), pool ({pool_val.shape}, {pool_val.dtype}, {pool_val.device}), {labels_val}, {t2-t1}s")
+    print(f"Finished accumulating {num_inception_images} activations, took {str(datetime.timedelta(seconds=t2-t1))}")
     return (
-        torch.cat(pool, 0),
-        torch.cat(logits, 0),
-        torch.cat(labels, 0)
-        if labels[0] is not None
-        else torch.zeros(torch.cat(logits, 0).shape[0]).long(),
+            pool, logits, labels
+        #torch.cat(pool, 0),
+        #torch.cat(logits, 0),
+        #torch.cat(labels, 0)
+        #if labels[0] is not None
+        #else torch.zeros(torch.cat(logits, 0).shape[0]).long(),
     )
 
 
