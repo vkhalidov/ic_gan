@@ -1,8 +1,8 @@
 {
   "experiment_name": "icgan_biggan_imagenet_res256",
-  "run_setup": "local_debug",
+  "run_setup": "slurm",
   "deterministic_run": true,
-  "num_workers": 10,
+  "num_workers": 8,
 
   "ddp_train": true,
   "n_nodes": 4,

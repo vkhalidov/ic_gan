@@ -49,6 +49,7 @@ def GAN_training_function(
         if y is not None:
             y = torch.split(y, batch_size)
         if features is not None:
+            features /= torch.linalg.norm(features, dim=1, keepdim=True)
             f_ = torch.split(features, batch_size)
         else:
             f_ = None
