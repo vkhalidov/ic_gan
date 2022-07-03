@@ -340,7 +340,7 @@ def load_inception_net(parallel=False, device="cuda"):
 # The iterator can return samples with a different batch size than used in
 # training, using the setting confg['inception_batchsize']
 def prepare_inception_metrics(
-    dataset,
+    inception_metrics_path,
     samples_per_class,
     parallel,
     no_fid=False,
@@ -356,15 +356,9 @@ def prepare_inception_metrics(
     # By default, remove the "hdf5" from dataset
     print(
         "Loading dataset inception moments from ",
-        os.path.join(
-            data_root, dataset + "_" + "inception_moments" + split_name + ".npz"
-        ),
+        inception_metrics_fpath
     )
-    stats = np.load(
-        os.path.join(
-            data_root, dataset + "_" + "inception_moments" + split_name + ".npz"
-        )
-    )
+    stats = np.load(inception_metrics_fpath)
     data_mu = stats["mu"]
     data_sigma = stats["sigma"]
     if stratified_fid:

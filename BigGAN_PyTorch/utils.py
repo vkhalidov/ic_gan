@@ -579,6 +579,12 @@ def prepare_parser():
         "(default: %(default)s)",
     )
     parser.add_argument(
+        "--inception_metrics",
+        type=str,
+        required=True,
+        help="Path to inception metrics",
+    )
+    parser.add_argument(
         "--hashname",
         action="store_true",
         default=False,
@@ -1030,7 +1036,7 @@ def prepare_root(config):
     for key in ["weights_root", "logs_root", "samples_root"]:
         if not os.path.exists(config[key]):
             print("Making directory %s for %s..." % (config[key], key))
-            os.mkdir(config[key])
+            os.makedirs(config[key], exist_ok = True)
 
 
 # Simple wrapper that applies EMA to a model. COuld be better done in 1.0 using

@@ -14,6 +14,7 @@ import functools
 import math
 from tqdm import tqdm, trange
 import argparse
+import datetime
 import time
 import subprocess
 import re
@@ -31,6 +32,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.optim as optim
 
 # Import my stuff
+import data_utils.async_dataset as async_dataset 
 import data_utils.inception_utils as inception_utils
 import utils
 import train_fns
@@ -75,6 +77,24 @@ def run(config, ddp_setup="slurm", master_node=""):
             )
     else:
         train(0, -1, config, None)
+
+
+def _set_sampler_epoch(data_loader, epoch):
+    if isinstance(data_loader.dataset, async_dataset.ImageLoadingIterableDataset):
+        # async dataset data loader contains:
+        # - an instance of ImageLoadingIterableDataset (dataset)
+        # - an _InfiniteConstantSampler (sampler)
+        # ImageLoadingIterableDataset contains:
+        # - an instance of AsyncToIterableDataset (dataset)
+        # AsyncToIterableDataset contains:
+        # - an instance of AsyncDatasetWrapper (dataset)
+        # - an instance of TrainingSampler (sampler)
+
+        data_loader.dataset.dataset.sampler.set_epoch(epoch)
+        print(f"Set epoch to {epoch} for async data loader")
+    else:
+        data_loader.sampler.set_epoch(epoch)
+        print(f"Set epoch to {epoch} for the data loader")
 
 
 def train(rank, world_size, config, dist_url):
@@ -270,9 +290,12 @@ def train(rank, world_size, config, dist_url):
     else:
         samples_per_class, class_probabilities = None, None
 
-    train_dataset = data_utils.get_dataset_hdf5(
+    #train_dataset = data_utils.get_dataset_hdf5(
+    train_dataset = data_utils.get_dataset_lavida(
         **{
             **config,
+            "dataset_spec": config["data_root"],
+            "auxdata_dir": os.path.join(os.path.dirname(config["data_root"]), "temp"),
             "data_path": config["data_root"],
             "batch_size": D_batch_size,
             "augment": config["hflips"],
@@ -282,7 +305,8 @@ def train(rank, world_size, config, dist_url):
             "ddp": config["ddp_train"],
         }
     )
-    train_loader = data_utils.get_dataloader(
+    #train_loader = data_utils.get_dataloader(
+    train_loader = data_utils.get_dataloader_lavida(
         **{
             **config,
             "dataset": train_dataset,
@@ -300,17 +324,17 @@ def train(rank, world_size, config, dist_url):
     )
 
     # Prepare inception metrics: FID and IS
-    is_moments_prefix = "I" if config["which_dataset"] == "imagenet" else "COCO"
+    #is_moments_prefix = "I" if config["which_dataset"] == "imagenet" else "COCO"
 
-    im_filename = "%s%i_%s" % (
-        is_moments_prefix,
-        config["resolution"],
-        "" if not config["longtail"] else "longtail",
-    )
-    print("Using ", im_filename, "for Inception metrics.")
+    #im_filename = "%s%i_%s" % (
+    #    is_moments_prefix,
+    #    config["resolution"],
+    #    "" if not config["longtail"] else "longtail",
+    #)
+    print("Using ", config["inception_metrics"], "for Inception metrics.")
 
     get_inception_metrics = inception_utils.prepare_inception_metrics(
-        im_filename,
+        config["inception_metrics"],
         samples_per_class,
         config["parallel"],
         config["no_fid"],
@@ -417,7 +441,8 @@ def train(rank, world_size, config, dist_url):
     for epoch in range(state_dict["epoch"], config["num_epochs"]):
         # Set epoch for distributed loader
         if config["ddp_train"]:
-            train_loader.sampler.set_epoch(epoch)
+            _set_sampler_epoch(train_loader, epoch)
+            #train_loader.sampler.set_epoch(epoch)
         # Initialize seeds at every epoch (useful for conditioning and
         # noise sampling, as well as data order in the sampler)
         if config["deterministic_run"]:
