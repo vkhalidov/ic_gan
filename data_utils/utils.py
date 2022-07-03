@@ -17,6 +17,7 @@ import json
 import math
 import torch
 import torchvision.transforms as transforms
+from torch.utils import data
 from torch.utils.data import DataLoader
 
 import shutil
@@ -439,6 +440,342 @@ def get_dataset_images(
         **dataset_kwargs
     )
     return dataset
+
+
+class LavidaILSVRCDataset(data.Dataset):
+
+    def __init__(self, lavida_dataset, features_fpath, aug_features_fpath, nn_fpath, nn_scores_fpath, features_dim, nn_count, num_instance_conditionings, sample_images_from_nn: bool = True, feature_augmentation: bool = False):
+        self.dataset = lavida_dataset
+        n_samples = len(lavida_dataset)
+        print(f"LavidaILSVRCDataset, features_arr: {n_samples}x{features_dim}")
+        self.features_arr = np.memmap(features_fpath, dtype=np.float32, mode="r", shape=(n_samples, features_dim))
+        self.aug_features_arr = np.memmap(aug_features_fpath, dtype=np.float32, mode="r", shape=(n_samples, features_dim))
+        self.nn_arr = np.memmap(nn_fpath, dtype=np.uint32, mode="r", shape=(n_samples, nn_count))
+        self.nn_scores_arr = np.memmap(nn_scores_fpath, dtype=np.float32, mode="r", shape=(n_samples, nn_count))
+        self.num_instance_conditionings = num_instance_conditionings
+        self.feature_augmentation = feature_augmentation
+
+    def get_image_fileobj(self, idx):
+        return self.dataset.get_image_fileobj(idx)
+
+    def get_image_filepath(self, idx):
+        return self.dataset.get_image_path(idx)
+
+    def get_feature(self, idx):
+        return self.features_arr[idx]
+
+    def get_aug_feature(self, idx):
+        return self.aug_features_arr[idx]
+
+    def get_nns(self, idx):
+        return self.nn_arr[idx]
+
+    def get_nn_scores(self, idx):
+        return self.nn_scores_arr[idx]
+
+    def __getitem__(self, idx: int):
+        if not self.feature_augmentation or np.random.randint(2):
+            feature = self.get_feature(idx)
+        else:
+            feature = self.get_aug_feature(idx)
+        if not self.sample_images_from_nn:
+            image_idx = idx
+        else:
+            nns = self.get_nns(idx)
+            image_idx = np.random.choice(nns, 1)[0]
+        return {
+            "idx": idx,
+            "img": self.get_image_fileobj(image_idx),
+            "img_fpath": self.get_image_filepath(image_idx),
+            "feats": feature,
+            "radii": self.get_nn_scores(idx)[-1],
+        }
+
+    def __len__(self):
+        return len(self.dataset)
+
+
+def get_dataset_lavida(
+    dataset_spec,
+    auxdata_dir,
+    resolution=224,
+    augment=False,
+    longtail=False,
+    local_rank=0,
+    copy_locally=False,
+    ddp=True,
+    is_async=True,
+    tmp_dir="",
+    class_cond=True,
+    instance_cond=False,
+    features_dim=2048,
+    feature_extractor="classification",
+    backbone_feature_extractor="resnext50",
+    which_nn_balance="instance_balance",
+    which_dataset="imagenet",
+    which_dataset_feats="imagenet",
+    split="train",
+    test_part=False,
+    kmeans_subsampled=-1,
+    n_subsampled_data=-1,
+    feature_augmentation=False,
+    filter_hd=-1,
+    k_nn=50,
+    load_in_mem_feats=False,
+    compute_nns=False,
+    debug=False,
+    collaged_input=None,
+    num_fake_conditionings=0,
+    num_instance_conditionings=1,
+    openimages=False,
+    gpu_knn=True,
+    unpaired_obj="",
+    seed=0,
+    **kwargs
+):
+    print("get_dataset_lavida", locals())
+    features_fpath = os.path.join(auxdata_dir, "features_nohflip.dat")
+    print("features_fpath", features_fpath)
+    aug_features_fpath = os.path.join(auxdata_dir, "features_hflip.dat")
+    print("aug_features_fpath", aug_features_fpath)
+    nn_fpath = os.path.join(auxdata_dir, "nns.dat")
+    print("nn_fpath", nn_fpath)
+    nn_scores_fpath = os.path.join(auxdata_dir, "nn_scores.dat")
+    print("nn_scores_fpath", nn_scores_fpath)
+    if copy_locally and local_rank == 0:
+        auxdata_tmp_dir = os.path.join(tmp_dir, "auxdata")
+        if os.path.exists(auxdata_tmp_dir):
+            if os.path.isdir(auxdata_tmp_dir):
+                shutil.rmtree(auxdata_tmp_dir)
+            else:
+                os.remove(auxdata_tmp_dir)
+        print(f"Copying data locally from {auxdata_dir} to {tmp_dir}...")
+        t1 = time.perf_counter()
+        for auxname in ["nns.dat", "nn_scores.dat", "features_hflip.dat", "features_nohflip.dat"]:
+            aux_fpath = os.path.join(auxdata_dir, auxname)
+            tmp_aux_fpath = os.path.join(tmp_dir, auxname)
+            shutil.copy2(aux_fpath, tmp_aux_fpath)
+        t2 = time.perf_counter()
+        print(f"Copying done, took {t2-t1}s")
+    if ddp:
+        dist.barrier()
+    transform_list = [
+        transforms.Resize(resolution, transforms.InterpolationMode.BICUBIC),
+        transforms.CenterCrop(resolution),
+        transforms.ToTensor(),
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+    ]
+    if augment:
+        transform_list.append(transforms.RandomHorizontalFlip())
+    transform = transforms.Compose(transform_list)
+
+    from data_utils.async_dataset import async_reader, ImageLoadingIterableDataset, TrainingSampler
+    import large_vision_dataset.factory as lavida_factory
+    print(f"Creating lavida dataset {dataset_spec}")
+    dataset_lavida = lavida_factory.make_dataset_with_transform(dataset_spec)
+    dataset_lavida_ex = LavidaILSVRCDataset(dataset_lavida, features_fpath, aug_features_fpath, nn_fpath, nn_scores_fpath, features_dim, nn_count=k_nn, num_instance_conditionings=num_instance_conditionings, feature_augmentation=feature_augmentation)
+    if not is_async:
+        return dataset_lavida_ex
+    n_samples = len(dataset_lavida)
+    sampler = TrainingSampler(size=n_samples, dataset_size=n_samples, seed=seed)
+    dataset_rawdata_labels = async_reader(
+        dataset_lavida_ex,
+        sampler=sampler,
+        max_prefetch=64,
+    )
+    dataset = ImageLoadingIterableDataset(dataset_rawdata_labels, transform)
+    return dataset
+
+
+def get_dataloader_lavida(
+    dataset,
+    batch_size=64,
+    num_workers=0,
+    shuffle=True,
+    pin_memory=True,
+    drop_last=True,
+    start_itr=0,
+    start_epoch=0,
+    use_checkpointable_sampler=False,
+    use_balanced_sampler=False,
+    custom_distrib_gen=False,
+    samples_per_class=None,
+    class_probabilities=None,
+    seed=0,
+    longtail_temperature=1,
+    rank=0,
+    world_size=-1,
+    **kwargs
+):
+    print(
+        f"DataLoader args: batch_size={batch_size}, num_workers={num_workers}, "
+        f"shuffle={shuffle}, pin_memory={pin_memory}, drop_last={drop_last}, "
+        f"start_itr={start_itr}, start_epoch={start_epoch}, "
+        f"use_checkpointable_sampler={use_checkpointable_sampler}, "
+        f"use_balanced_sampler={use_balanced_sampler}, "
+        f"custom_distrib_gen={custom_distrib_gen}, "
+        f"samples_per_class={samples_per_class}, "
+        f"class_probabilities={class_probabilities}, "
+        f"seed={seed}, longtail_temperature={longtail_temperature}, "
+        f"rank={rank}, world_size={world_size}"
+    )
+    # Prepare loader; the loaders list is for forward compatibility with
+    # using validation / test splits.
+    # if use_multiepoch_sampler:
+    loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        drop_last=drop_last,
+    )
+    return loader
+
+def get_dataloader(
+    dataset,
+    batch_size=64,
+    num_workers=8,
+    shuffle=True,
+    pin_memory=True,
+    drop_last=True,
+    start_itr=0,
+    start_epoch=0,
+    use_checkpointable_sampler=False,
+    use_balanced_sampler=False,
+    custom_distrib_gen=False,
+    samples_per_class=None,
+    class_probabilities=None,
+    seed=0,
+    longtail_temperature=1,
+    rank=0,
+    world_size=-1,
+    **kwargs
+):
+    """Get DataLoader to iterate over the dataset.
+
+    Parameters
+    ----------
+        dataset: Dataset
+            Class with the specified dataset characteristics.
+        batch_size: int, optional
+            Batch size.
+        num_workers: int, optional
+            Number of workers for the dataloader.
+        shuffle: bool, optional
+            If True, the data is shuffled. If a sampler is used (use_checkpointable_sampler=True,
+            use_balanced_sampler=True or world_size>-1), this parameter is not used.
+        pin_memory: bool, optional
+            Pin memory in the dataloader.
+        drop_last: bool, optional
+            Drop last incomplete batch in the dataloader.
+        start_itr: int, optional
+            Iteration number to resume the sample from. Only used with
+             use_checkpointable_sampler=True.
+        start_epoch: int, optional
+            Epoch number to resume the sample from. Only used with
+             use_checkpointable_sampler=True.
+        use_checkpointable_sampler: bool, optional
+            If True, use the CheckpointedSampler class to resume jobs from the last seen batch
+             (deterministic).
+        use_balanced_sampler: bool, optional
+            If True, balance the data according to a specific class distribution. Use in conjunction
+             with ``custom_distrib_gen``, ``samples_per_class``, ``class_probabilities`` and
+              ``longtail_temperature``.
+        custom_distrib_gen: bool, optional
+            Use a temperature controlled class balancing.
+        samples_per_class: list, optional
+            A list of int values that indicate the number of samples per class.
+        class_probabilities: list, optional
+            A list of float values indicating the probability of a class in the dataset.
+        longtail_temperature: float, optional
+            Temperature value to smooth the longtail distribution with a softmax function.
+        seed: int, optional
+            Random seed used.
+        rank: int, optional
+            Rank of the current process (if using DistributedDataParallel training).
+        world_size: int, optional
+            World size (if using DistributedDataParallel training).
+    Returns
+    -------
+        An instance of DataLoader.
+    """
+
+    # Prepare loader; the loaders list is for forward compatibility with
+    # using validation / test splits.
+    # if use_multiepoch_sampler:
+    loader_kwargs = {
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+        "drop_last": drop_last,
+    }
+    print("Dropping last batch? ", drop_last)
+    # Otherwise, it has issues dividing the batch for accumulations
+    # if longtail:
+    #   loader_kwargs.update({'drop_last': drop_last})
+    if use_checkpointable_sampler:
+        print(
+            "Using checkpointable sampler from start_itr %d..., using seed %d"
+            % (start_itr, seed)
+        )
+
+        sampler = CheckpointedSampler(
+            dataset,
+            start_itr,
+            start_epoch,
+            batch_size,
+            class_balanced=use_balanced_sampler,
+            custom_distrib_gen=custom_distrib_gen,
+            longtail_temperature=longtail_temperature,
+            samples_per_class=samples_per_class,
+            class_probabilities=class_probabilities,
+            seed=seed,
+        )
+        loader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            sampler=sampler,
+            shuffle=False,
+            worker_init_fn=seed_worker,
+            **loader_kwargs
+        )
+    else:
+        if use_balanced_sampler:
+            print("Balancing real data! Custom? ", custom_distrib_gen)
+            weights = make_weights_for_balanced_classes(
+                samples_per_class,
+                dataset.labels,
+                1000,
+                custom_distrib_gen,
+                longtail_temperature,
+                class_probabilities=class_probabilities,
+            )
+            weights = torch.DoubleTensor(weights)
+        else:
+            weights = None
+        if world_size == -1:
+            if use_balanced_sampler:
+                sampler = torch.utils.data.sampler.WeightedRandomSampler(
+                    weights, len(weights)
+                )
+                shuffle = False
+            else:
+                sampler = None
+        else:
+            sampler = DistributedSampler(
+                dataset, num_replicas=world_size, rank=rank, weights=weights
+            )
+            shuffle = False
+        print("Loader workers?", loader_kwargs, " with shuffle?", shuffle)
+        loader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            sampler=sampler,
+            worker_init_fn=seed_worker if use_checkpointable_sampler else None,
+            **loader_kwargs
+        )
+
+    return loader
 
 
 def get_dataset_hdf5(
