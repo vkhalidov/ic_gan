@@ -605,7 +605,7 @@ class AsyncDatasetWrapper(AsyncDataset[Dict[str, Any]]):
 
         return {
             "idx": idx,
-            "img": self.dataset.get_image_fileobj(sampled_nn),
+            "img": self.dataset.get_image_fileobj(sampled_nn).read(),
             "feats": feature,
             "radii": nn_scores[-1],
         }
@@ -667,11 +667,8 @@ class ImageLoadingIterableDataset(data.IterableDataset):
         return self.dataset.sampler
 
     def sample_conditioning_instance_balance(self, batch_size, weights=None, sample_random_masks=False):
-        data = {}
         sel_idxs = np.random.randint(0, len(self.possible_sampling_idxs), size=(batch_size,))
         sel_idxs = self.possible_sampling_idxs[sel_idxs]
-        # print(f"sample_conditioning_instance_balance batch_size={batch_size}, {sel_idxs}")
-        # dataset: async_reader = AsyncToIterableDataset(AsyncDatasetWrapper(lavida dataset))
         hflip = np.random.randint(2, size=len(sel_idxs))
         instance_features = np.concatenate([
             self.dataset.dataset.dataset.get_feature(idx).reshape((1, -1))
@@ -679,24 +676,11 @@ class ImageLoadingIterableDataset(data.IterableDataset):
             self.dataset.dataset.dataset.get_aug_feature(idx).reshape((1, -1))
             for i, idx in enumerate(sel_idxs)
         ])
-        #np.set_printoptions(threshold=sys.maxsize)
-        #print(instance_features)
         instance_features /= np.linalg.norm(instance_features, axis=-1, keepdims=True)
-        #print(f"instance_features mean={instance_features.mean(axis=0)}, std={instance_features.std(axis=0)}, shape={instance_features.shape}")
-        #print(f"instance_features stdmax={instance_features.std(axis=0).max()}, stdmin={instance_features.std(axis=0).min()}")
 
-        if DEBUG:
-            global debug_counter
-            basedir = "/scratch/vkhalidov/2022_icgan/debug"
-            i_fpath = os.path.join(basedir, f"sample_i_{debug_counter:02d}.npy")
-            instance_features = np.load(i_fpath).astype(np.float32)
-            print(f"sample {debug_counter}: loaded samples from {i_fpath}")
-            print(f"instance_features mean={instance_features.mean(axis=0)}, std={instance_features.std(axis=0)}, shape={instance_features.shape}")
-            print(f"instance_features stdmax={instance_features.std(axis=0).max()}, stdmin={instance_features.std(axis=0).min()}")
-            debug_counter += 1
-
-        data["feats_g"] = torch.from_numpy(instance_features)
-        return data
+        labels_g = None
+        feats_g = torch.from_numpy(instance_features)
+        return labels_g, feats_g
 
 
 class ImageLoadingIndexedDataset(data.Dataset):

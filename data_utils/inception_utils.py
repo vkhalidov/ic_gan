@@ -24,6 +24,7 @@
 import os
 import numpy as np
 from scipy import linalg  # For numpy FID
+import datetime
 import time
 
 import torch
@@ -295,7 +296,7 @@ def accumulate_inception_activations(sample, net, num_inception_images=50000, mo
     next_log_point_idx = 0
     while offset < num_inception_images:
         with torch.no_grad():
-            images, labels_val, _, _= sample()
+            images, labels_val, _ = sample()
             if model_backbone == 'stylegan2':
                 images = torch.clamp((images * 127.5 + 128), 0, 255)
                 images = ((images / 255) - 0.5) * 2
@@ -368,7 +369,7 @@ def load_inception_net(parallel=False, device="cuda"):
 # The iterator can return samples with a different batch size than used in
 # training, using the setting confg['inception_batchsize']
 def prepare_inception_metrics(
-    inception_metrics_path,
+    inception_metrics_fpath,
     samples_per_class,
     parallel,
     no_fid=False,
@@ -491,8 +492,8 @@ def compute_fid(pool, data_mu, data_sigma, prints, use_torch, device="cuda"):
         FID = torch_calculate_frechet_distance(
             mu,
             sigma,
-            torch.tensor(data_mu).float().to(device),
-            torch.tensor(data_sigma).float().to(device),
+            torch.tensor(data_mu).float().to(mu.device),
+            torch.tensor(data_sigma).float().to(sigma.device),
         )
         FID = float(FID.cpu().numpy())
     else:

@@ -464,7 +464,8 @@ def train(rank, world_size, config, dist_url):
             if config["instance_cond"] and config["class_cond"]:
                 x, in_label, in_feat, _ = batch
             elif config["instance_cond"]:
-                x, in_feat, _ = batch
+                x = batch["img"]
+                in_feat = batch["feats"]
             elif config["class_cond"]:
                 x, in_label = batch
                 if config["constant_conditioning"]:
