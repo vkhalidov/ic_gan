@@ -291,20 +291,34 @@ def train(rank, world_size, config, dist_url):
         samples_per_class, class_probabilities = None, None
 
     #train_dataset = data_utils.get_dataset_hdf5(
-    train_dataset = data_utils.get_dataset_lavida(
-        **{
-            **config,
-            "dataset_spec": config["data_root"],
-            "auxdata_dir": os.path.join(os.path.dirname(config["data_root"]), "temp"),
-            "data_path": config["data_root"],
-            "batch_size": D_batch_size,
-            "augment": config["hflips"],
-            "local_rank": local_rank,
-            "copy_locally": copy_locally,
-            "tmp_dir": tmp_dir,
-            "ddp": config["ddp_train"],
-        }
-    )
+    if os.path.isfile(config["data_root"]) and config["data_root"].endswith("hdf5conf"):
+        train_dataset = data_utils.get_dataset_lavida_hdf5(
+            **{
+                **config,
+                "dataset_spec": config["data_root"],
+                "batch_size": D_batch_size,
+                "augment": config["hflips"],
+                "local_rank": local_rank,
+                "copy_locally": copy_locally,
+                "tmp_dir": tmp_dir,
+                "ddp": config["ddp_train"],
+            }
+        )
+    elif os.path.isfile(config["data_root"]) and config["data_root"].endswith("yaml"):
+        train_dataset = data_utils.get_dataset_lavida(
+            **{
+                **config,
+                "dataset_spec": config["data_root"],
+                "auxdata_dir": os.path.join(os.path.dirname(config["data_root"]), "temp"),
+                "data_path": config["data_root"],
+                "batch_size": D_batch_size,
+                "augment": config["hflips"],
+                "local_rank": local_rank,
+                "copy_locally": copy_locally,
+                "tmp_dir": tmp_dir,
+                "ddp": config["ddp_train"],
+            }
+        )
     #train_loader = data_utils.get_dataloader(
     train_loader = data_utils.get_dataloader_lavida(
         **{

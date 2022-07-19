@@ -20,6 +20,8 @@ import torchvision.transforms as transforms
 from torch.utils import data
 from torch.utils.data import DataLoader
 
+import h5py as h5
+
 import shutil
 import torch.distributed as dist
 
@@ -442,6 +444,96 @@ def get_dataset_images(
     return dataset
 
 
+class LavidaHDF5PrefetchedData:
+
+    def __init__(self, index, image, feature, nn):
+        self.index = index
+        self.image = image
+        self.feature = feature
+        self.nn = nn
+
+    def load(self):
+        return {
+            "idx": self.index,
+            "img": (torch.from_numpy(self.image).float() / 255 - 0.5) * 2,
+            "feats": self.feature,
+            "nn": self.nn
+        }
+
+
+class LavidaHDF5Transform:
+
+    def __init__(self, image_transform=None, feature_transform=None):
+        self.image_transform = image_transform
+        self.feature_transform = feature_transform
+
+    def __call__(self, data):
+        return {
+            "idx": data["idx"],
+            "nn": data["nn"],
+            "img": (
+                data["img"] if self.image_transform is None
+                else self.image_transform(data["img"])
+            ),
+            "feats": (
+                data["feats"] if self.feature_transform is None
+                else self.feature_transform(data["feats"])
+            ),
+        }
+
+
+class LavidaHDF5Dataset(data.Dataset):
+
+    def __init__(
+        self,
+        images_labels_fpath,
+        features_fpath,
+        nns_fpath,
+        num_instance_conditionings,
+        sample_images_from_nn: bool = True,
+        feature_augmentation: bool = False
+    ):
+        self.images_labels_fpath = images_labels_fpath
+        self.features_fpath = features_fpath
+        self.nns_fpath = nns_fpath
+        self.images_labels_fh = h5.File(images_labels_fpath, "r")
+        self.features_fh = h5.File(features_fpath, "r")
+        self.nns_fh = h5.File(nns_fpath, "r")
+        self.feature_augmentation = feature_augmentation
+        self.n_samples = len(self.images_labels_fh["imgs"])
+
+    def prefetch_data(self, index):
+        nns = self.nns_fh["sample_nns"][index]
+        sampled_nn = np.random.choice(nns)
+        hflip = np.random.randint(2) == 1
+        if self.feature_augmentation and hflip:
+            feat = self.features_fh["feats_hflip"][index]
+        else:
+            feat = self.features_fh["feats"][index]
+
+        return LavidaHDF5PrefetchedData(
+            index,
+            self.images_labels_fh["imgs"][sampled_nn],
+            feat,
+            sampled_nn,
+        )
+
+    def __getitem__(self, idx):
+        return self.dataset.prefetch_data(idx).load()
+
+    def get_feature(self, idx):
+        return self.features_fh["feats"][idx].astype(np.float32)
+
+    def get_aug_feature(self, idx):
+        return self.features_fh["feats_hflip"][idx].astype(np.float32)
+
+    def get_nns(self, idx):
+        return self.nns_fh["sample_nns"][idx]
+
+    def __len__(self):
+        return self.n_samples
+
+
 class LavidaILSVRCDataset(data.Dataset):
 
     def __init__(self, lavida_dataset, features_fpath, aug_features_fpath, nn_fpath, nn_scores_fpath, features_dim, nn_count, num_instance_conditionings, sample_images_from_nn: bool = True, feature_augmentation: bool = False):
@@ -493,6 +585,106 @@ class LavidaILSVRCDataset(data.Dataset):
 
     def __len__(self):
         return len(self.dataset)
+
+
+def get_lavida_sampler(dataset, shuffle: bool = True):
+    import torch.distributed as dist
+    from torch.utils.data import RandomSampler, DistributedSampler
+    world_size = dist.get_world_size() if dist.is_initialized() else 1
+    rank = dist.get_rank() if dist.is_initialized() else 0
+    if world_size == 1:
+        sampler = RandomSampler(dataset)
+    else:
+        sampler = DistributedSampler(
+            dataset,
+            num_replicas = world_size,
+            rank = rank,
+            shuffle = shuffle,
+        )
+    return sampler
+
+
+def _ensure_absolute_path(fpath, basedir):
+    if not os.path.isabs(fpath):
+        return os.path.join(basedir, fpath)
+    return fpath
+
+
+def get_dataset_lavida_hdf5(
+    dataset_spec,
+    resolution=224,
+    augment=False,
+    longtail=False,
+    local_rank=0,
+    copy_locally=False,
+    ddp=True,
+    is_async=True,
+    tmp_dir="",
+    class_cond=True,
+    instance_cond=False,
+    features_dim=2048,
+    feature_extractor="classification",
+    backbone_feature_extractor="resnext50",
+    which_nn_balance="instance_balance",
+    which_dataset="imagenet",
+    which_dataset_feats="imagenet",
+    split="train",
+    test_part=False,
+    kmeans_subsampled=-1,
+    n_subsampled_data=-1,
+    feature_augmentation=False,
+    filter_hd=-1,
+    k_nn=50,
+    load_in_mem_feats=False,
+    compute_nns=False,
+    debug=False,
+    collaged_input=None,
+    num_fake_conditionings=0,
+    num_instance_conditionings=1,
+    openimages=False,
+    gpu_knn=True,
+    unpaired_obj="",
+    seed=0,
+    shuffle=True,
+    **kwargs
+):
+    print("get_dataset_lavida_hdf5", locals())
+    dataset_spec_dir = os.path.dirname(dataset_spec)
+    print(f"Creating lavida HDF5 dataset: {dataset_spec}")
+    with open(dataset_spec, "r") as f:
+        images_labels_fpath, features_fpath, nns_fpath = [
+            _ensure_absolute_path(v.strip(), dataset_spec_dir)
+            for v in f.readlines()
+        ]
+    print(f"Images: {images_labels_fpath}")
+    print(f"Features: {features_fpath}")
+    print(f"NNs: {nns_fpath}")
+    image_transform_list = []
+    if augment:
+        image_transform_list.append(transforms.RandomHorizontalFlip())
+    transform = LavidaHDF5Transform(
+        image_transform=transforms.Compose(image_transform_list)
+    )
+    from data_utils.async_dataset import async_reader, ImageLoadingIterableDataset
+
+    dataset_lavida_hdf5 = LavidaHDF5Dataset(
+        images_labels_fpath,
+        features_fpath,
+        nns_fpath,
+        num_instance_conditionings=num_instance_conditionings,
+        feature_augmentation=feature_augmentation
+    )
+    if not is_async:
+        return dataset_lavida_hdf5
+
+    sampler = get_lavida_sampler(dataset_lavida_hdf5, shuffle=shuffle)
+    dataset_rawdata_labels = async_reader(
+        dataset_lavida_hdf5,
+        sampler=sampler,
+        max_prefetch=32,
+    )
+    dataset = ImageLoadingIterableDataset(dataset_rawdata_labels, transform)
+    return dataset
 
 
 def get_dataset_lavida(
@@ -572,8 +764,18 @@ def get_dataset_lavida(
     from data_utils.async_dataset import async_reader, ImageLoadingIterableDataset, TrainingSampler
     import large_vision_dataset.factory as lavida_factory
     print(f"Creating lavida dataset {dataset_spec}")
-    dataset_lavida = lavida_factory.make_dataset_with_transform(dataset_spec)
-    dataset_lavida_ex = LavidaILSVRCDataset(dataset_lavida, features_fpath, aug_features_fpath, nn_fpath, nn_scores_fpath, features_dim, nn_count=k_nn, num_instance_conditionings=num_instance_conditionings, feature_augmentation=feature_augmentation)
+    dataset_lavida = lavida_factory.make_dataset(dataset_spec)
+    dataset_lavida_ex = LavidaILSVRCDataset(
+        dataset_lavida,
+        features_fpath,
+        aug_features_fpath,
+        nn_fpath,
+        nn_scores_fpath,
+        features_dim,
+        nn_count=k_nn,
+        num_instance_conditionings=num_instance_conditionings,
+        feature_augmentation=feature_augmentation
+    )
     if not is_async:
         return dataset_lavida_ex
     n_samples = len(dataset_lavida)
