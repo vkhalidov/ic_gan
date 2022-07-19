@@ -140,6 +140,13 @@ def torch_cov(m, rowvar=False):
     return fact * m.matmul(mt).squeeze()
 
 
+def compute_error(A, sA):
+    normA = torch.sqrt(torch.sum(torch.sum(A * A, dim=1),dim=1))
+    error = A - torch.bmm(sA, sA)
+    error = torch.sqrt((error * error).sum(dim=1).sum(dim=1)) / normA
+    return torch.mean(error)
+
+
 # Pytorch implementation of matrix sqrt, from Tsung-Yu Lin, and Subhransu Maji
 # https://github.com/msubhransu/matrix-sqrt
 def sqrt_newton_schulz(A, numIters, dtype=None):
@@ -150,12 +157,20 @@ def sqrt_newton_schulz(A, numIters, dtype=None):
         dim = A.shape[1]
         normA = A.mul(A).sum(dim=1).sum(dim=1).sqrt()
         Y = A.div(normA.view(batchSize, 1, 1).expand_as(A))
+        sA = Y*torch.sqrt(normA).view(batchSize, 1, 1).expand_as(A)
+        err = compute_error(A, sA).item()
         I = torch.eye(dim, dim).view(1, dim, dim).repeat(batchSize, 1, 1).type(dtype)
         Z = torch.eye(dim, dim).view(1, dim, dim).repeat(batchSize, 1, 1).type(dtype)
         for i in range(numIters):
             T = 0.5 * (3.0 * I - Z.bmm(Y))
-            Y = Y.bmm(T)
+            Ynew = Y.bmm(T)
+            sA = Ynew*torch.sqrt(normA).view(batchSize, 1, 1).expand_as(A)
+            err_new = compute_error(A, sA).item()
+            if err_new > err:
+                break
+            Y = Ynew
             Z = T.bmm(Z)
+            err = err_new
         sA = Y * torch.sqrt(normA).view(batchSize, 1, 1).expand_as(A)
     return sA
 

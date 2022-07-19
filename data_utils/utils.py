@@ -20,6 +20,8 @@ import torchvision.transforms as transforms
 from torch.utils import data
 from torch.utils.data import DataLoader
 
+import h5py as h5
+
 import shutil
 import torch.distributed as dist
 
@@ -442,6 +444,78 @@ def get_dataset_images(
     return dataset
 
 
+class LavidaHDF5PrefetchedData:
+    def __init__(self, index, image, feature, nn):
+        self.index = index
+        self.image = image
+        self.feature = feature
+        self.nn = nn
+    def load(self):
+        return {
+            "idx": self.index,
+            "img": (torch.from_numpy(self.image).float() / 255 - 0.5) * 2,
+            "feats": self.feature,
+            "nn": self.nn
+        }
+
+
+class LavidaHDF5Transform:
+    def __init__(self, image_transform=None, feature_transform=None):
+        self.image_transform = image_transform
+        self.feature_transform = feature_transform
+    def __call__(self, data):
+        return {
+            "idx": data["idx"],
+            "nn": data["nn"],
+            "img": data["img"] if self.image_transform is None else self.image_transform(data["img"]),
+            "feats": data["feats"] if self.feature_transform is None else self.feature_transform(data["feats"]),
+        }
+
+
+class LavidaHDF5Dataset(data.Dataset):
+    def __init__(
+        self,
+        images_labels_fpath,
+        features_fpath,
+        nns_fpath,
+        num_instance_conditionings,
+        sample_images_from_nn: bool = True,
+        feature_augmentation: bool = False
+    ):
+        self.images_labels_fpath = images_labels_fpath
+        self.features_fpath = features_fpath
+        self.nns_fpath = nns_fpath
+        self.images_labels_fh = h5.File(images_labels_fpath, "r")
+        self.features_fh = h5.File(features_fpath, "r")
+        self.nns_fh = h5.File(nns_fpath, "r")
+        self.feature_augmentation = feature_augmentation
+    def prefetch_data(self, index):
+        nns = self.nns_fh["sample_nns"][index]
+        sampled_nn = np.random.choice(nns)
+        print(f"sampled_nn for {index}: {sampled_nn}")
+        hflip = np.random.randint(2) == 1
+        print(f"sampled hflip: {hflip}")
+        if self.feature_augmentation and hflip:
+            feat = self.features_fh["feats_hflip"][index]
+        else:
+            feat = self.features_fh["feats"][index]
+
+        return LavidaHDF5PrefetchedData(
+            index,
+            self.images_labels_fh["imgs"][sampled_nn],
+            feat,
+            sampled_nn,
+        )
+    def get_feature(self, idx):
+        return self.features_fh["feats"][idx].astype(np.float32)
+    def get_aug_feature(self, idx):
+        return self.features_fh["feats_hflip"][idx].astype(np.float32)
+    def get_nns(self, idx):
+        return self.nns_fh["sample_nns"][idx]
+    def __len__(self):
+        return len(self.images_labels_fh["imgs"])
+
+
 class LavidaILSVRCDataset(data.Dataset):
 
     def __init__(self, lavida_dataset, features_fpath, aug_features_fpath, nn_fpath, nn_scores_fpath, features_dim, nn_count, num_instance_conditionings, sample_images_from_nn: bool = True, feature_augmentation: bool = False):
@@ -474,6 +548,7 @@ class LavidaILSVRCDataset(data.Dataset):
         return self.nn_scores_arr[idx]
 
     def __getitem__(self, idx: int):
+        print("data_utils/utils.py:541 np.random.randint(2)")
         if not self.feature_augmentation or np.random.randint(2):
             feature = self.get_feature(idx)
         else:
@@ -482,6 +557,7 @@ class LavidaILSVRCDataset(data.Dataset):
             image_idx = idx
         else:
             nns = self.get_nns(idx)
+            print("data_utils/utils.py:550 np.random.choice(nns, 1)[0]")
             image_idx = np.random.choice(nns, 1)[0]
         return {
             "idx": idx,
@@ -493,6 +569,79 @@ class LavidaILSVRCDataset(data.Dataset):
 
     def __len__(self):
         return len(self.dataset)
+
+
+def get_dataset_lavida_hdf5(
+    dataset_spec,
+    resolution=224,
+    augment=False,
+    longtail=False,
+    local_rank=0,
+    copy_locally=False,
+    ddp=True,
+    is_async=True,
+    tmp_dir="",
+    class_cond=True,
+    instance_cond=False,
+    features_dim=2048,
+    feature_extractor="classification",
+    backbone_feature_extractor="resnext50",
+    which_nn_balance="instance_balance",
+    which_dataset="imagenet",
+    which_dataset_feats="imagenet",
+    split="train",
+    test_part=False,
+    kmeans_subsampled=-1,
+    n_subsampled_data=-1,
+    feature_augmentation=False,
+    filter_hd=-1,
+    k_nn=50,
+    load_in_mem_feats=False,
+    compute_nns=False,
+    debug=False,
+    collaged_input=None,
+    num_fake_conditionings=0,
+    num_instance_conditionings=1,
+    openimages=False,
+    gpu_knn=True,
+    unpaired_obj="",
+    seed=0,
+    **kwargs
+):
+    print("get_dataset_lavida_hdf5", locals())
+    dataset_spec_dir = os.path.dirname(dataset_spec)
+    with open(dataset_spec, "r") as f:
+        images_labels_fpath, features_fpath, nns_fpath = [v.strip() for v in f.readlines()]
+    if not os.path.isabs(images_labels_fpath):
+        images_labels_fpath = os.path.join(dataset_spec_dir, images_labels_fpath)
+    if not os.path.isabs(features_fpath):
+        features_fpath = os.path.join(dataset_spec_dir, features_fpath)
+    if not os.path.isabs(nns_fpath):
+        nns_fpath = os.path.join(dataset_spec_dir, nns_fpath)
+    image_transform_list = []
+    #if augment:
+    #    image_transform_list.append(transforms.RandomHorizontalFlip())
+    transform = LavidaHDF5Transform(image_transform=transforms.Compose(image_transform_list))
+    from data_utils.async_dataset import async_reader, ImageLoadingIterableDataset, TrainingSampler, ImageLoadingIndexedDataset
+    dataset_lavida_hdf5 = LavidaHDF5Dataset(
+        images_labels_fpath,
+        features_fpath,
+        nns_fpath,
+        num_instance_conditionings=num_instance_conditionings,
+        feature_augmentation=feature_augmentation
+    )
+    if not is_async:
+        return dataset_lavida_hdf5
+    n_samples = len(dataset_lavida_hdf5)
+    #sampler = TrainingSampler(size=n_samples, dataset_size=n_samples, seed=seed)
+    #dataset_rawdata_labels = async_reader(
+    #    dataset_lavida_hdf5,
+    #    sampler=sampler,
+    #    max_prefetch=64,
+    #)
+    #dataset = ImageLoadingIterableDataset(dataset_rawdata_labels, transform)
+    dataset = ImageLoadingIndexedDataset(dataset_lavida_hdf5, transform)
+    return dataset
 
 
 def get_dataset_lavida(
@@ -577,13 +726,14 @@ def get_dataset_lavida(
     if not is_async:
         return dataset_lavida_ex
     n_samples = len(dataset_lavida)
-    sampler = TrainingSampler(size=n_samples, dataset_size=n_samples, seed=seed)
-    dataset_rawdata_labels = async_reader(
-        dataset_lavida_ex,
-        sampler=sampler,
-        max_prefetch=64,
-    )
-    dataset = ImageLoadingIterableDataset(dataset_rawdata_labels, transform)
+    #sampler = TrainingSampler(size=n_samples, dataset_size=n_samples, seed=seed)
+    #dataset_rawdata_labels = async_reader(
+    #    dataset_lavida_ex,
+    #    sampler=sampler,
+    #    max_prefetch=64,
+    #)
+    #dataset = ImageLoadingIterableDataset(dataset_rawdata_labels, transform)
+    dataset = ImageLoadingIndexedDataset(dataset_rawdata_labels, transform)
     return dataset
 
 
@@ -628,6 +778,7 @@ def get_dataloader_lavida(
         num_workers=num_workers,
         pin_memory=pin_memory,
         drop_last=drop_last,
+        shuffle=shuffle,
     )
     return loader
 
@@ -1337,17 +1488,21 @@ class Distribution(torch.Tensor):
             ) / torch.sum(torch.exp(self.class_prob / kwargs["temperature"]))
 
     def seed_generator(self, seed):
+        print("seed generator", seed)
         self.generator.manual_seed(seed)
 
     def sample_(self):
         if self.dist_type == "normal":
+            print("data_utils/utils.py:1476 self.normal_(self.mean, self.var)")
             self.normal_(self.mean, self.var)
         elif self.dist_type == "categorical":
+            print("data_utils/utils.py:1479 self.random_(0, self.num_categories)")
             self.random_(0, self.num_categories)
         elif (
             "categorical_longtail" in self.dist_type
             or "categorical_longtail_temperature" in self.dist_type
         ):
+            print("data_utils/utils.py:1485 torch.multinomial(self.class_prob, len(self), replacement=True)")
             self.data = torch.multinomial(
                 self.class_prob, len(self), replacement=True
             ).to(self.device)

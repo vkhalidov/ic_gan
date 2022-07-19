@@ -131,6 +131,7 @@ def train(rank, world_size, config, dist_url):
     # for the activation specified as a string)'
 
     # Seed RNG
+    print("seed rng", config["seed"] + rank)
     utils.seed_rng(config["seed"] + rank)
 
     # Setup cudnn.benchmark for free speed
@@ -291,20 +292,34 @@ def train(rank, world_size, config, dist_url):
         samples_per_class, class_probabilities = None, None
 
     #train_dataset = data_utils.get_dataset_hdf5(
-    train_dataset = data_utils.get_dataset_lavida(
-        **{
-            **config,
-            "dataset_spec": config["data_root"],
-            "auxdata_dir": os.path.join(os.path.dirname(config["data_root"]), "temp"),
-            "data_path": config["data_root"],
-            "batch_size": D_batch_size,
-            "augment": config["hflips"],
-            "local_rank": local_rank,
-            "copy_locally": copy_locally,
-            "tmp_dir": tmp_dir,
-            "ddp": config["ddp_train"],
-        }
-    )
+    if os.path.isfile(config["data_root"]) and config["data_root"].endswith("hdf5conf"):
+        train_dataset = data_utils.get_dataset_lavida_hdf5(
+            **{
+                **config,
+                "dataset_spec": config["data_root"],
+                "batch_size": D_batch_size,
+                "augment": config["hflips"],
+                "local_rank": local_rank,
+                "copy_locally": copy_locally,
+                "tmp_dir": tmp_dir,
+                "ddp": config["ddp_train"],
+            }
+        )
+    elif os.path.isfile(config["data_root"]) and config["data_root"].endswith("yaml"):
+        train_dataset = data_utils.get_dataset_lavida(
+            **{
+                **config,
+                "dataset_spec": config["data_root"],
+                "auxdata_dir": os.path.join(os.path.dirname(config["data_root"]), "temp"),
+                "data_path": config["data_root"],
+                "batch_size": D_batch_size,
+                "augment": config["hflips"],
+                "local_rank": local_rank,
+                "copy_locally": copy_locally,
+                "tmp_dir": tmp_dir,
+                "ddp": config["ddp_train"],
+            }
+        )
     #train_loader = data_utils.get_dataloader(
     train_loader = data_utils.get_dataloader_lavida(
         **{
@@ -446,6 +461,7 @@ def train(rank, world_size, config, dist_url):
         # Initialize seeds at every epoch (useful for conditioning and
         # noise sampling, as well as data order in the sampler)
         if config["deterministic_run"]:
+            print("seed rng", config["seed"] + rank + state_dict["epoch"])
             utils.seed_rng(config["seed"] + rank + state_dict["epoch"])
         # Which progressbar to use? TQDM or my own?
         if config["pbar"] == "mine":
@@ -458,8 +474,8 @@ def train(rank, world_size, config, dist_url):
         s = time.time()
         print("Before iteration, dataloader length", len(train_loader))
         for i, batch in enumerate(pbar):
-            # if i> 5:
-            #     break
+            if i> 0:
+                break
             in_label, in_feat = None, None
             if config["instance_cond"] and config["class_cond"]:
                 x, in_label, in_feat, _ = batch
@@ -517,6 +533,8 @@ def train(rank, world_size, config, dist_url):
 
             # Compute IS and FID using training dataset as reference
             test_time = time.time()
+            IS, FID = 0, 0
+            """
             IS, FID = train_fns.test(
                 G,
                 D,
@@ -535,6 +553,7 @@ def train(rank, world_size, config, dist_url):
                 D_optim=optimizer_D,
                 rank=rank,
             )
+            """
             print("Testing took ", time.time() - test_time)
 
             if 2 * IS < state_dict["best_IS"] and config["stop_when_diverge"]:

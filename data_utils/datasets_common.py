@@ -446,6 +446,7 @@ class ILSVRC_HDF5_feats(data.Dataset):
 
         # Reducing the number of available samples according to different criteria
         self.possible_sampling_idxs = range(self.num_imgs)
+        self.sample_conditioning_counter = 0
         self.kmeans_samples = None
         if kmeans_file is not None:
             print("Loading file  with just a few centroids (kmeans)... ", kmeans_file)
@@ -491,6 +492,7 @@ class ILSVRC_HDF5_feats(data.Dataset):
         """
         # This only changes the index if possible_sampling_idx contains only a subset of the data
         # (k-means/random sampling or evaluation sets in COCO-Stuff)
+        print(f"ILSVRC_HDF5_feats getitem {index}: load_features={self.load_features}, apply_norm={self.apply_norm}, load_labels={self.load_labels}")
         index = self.possible_sampling_idxs[index]
         img = self._get_image(index)
         target = self.get_label(index)
@@ -554,6 +556,7 @@ class ILSVRC_HDF5_feats(data.Dataset):
             sel_idxs = np.random.choice(
                 self.possible_sampling_idxs, batch_size, replace=True, p=weights
             )
+        print(f"Sample conditioning, sel_idxs {sel_idxs}")
 
         # Features from center example
         instance_gen = self.get_instance_features(sel_idxs)
@@ -572,6 +575,15 @@ class ILSVRC_HDF5_feats(data.Dataset):
             labels_gen = None
 
         instance_gen = torch.FloatTensor(instance_gen)
+        import pickle
+        with open(f"/checkpoint/vkhalidov/2022_icgan/debug_icgan_vkhalidov/sample_conditionings_{self.sample_conditioning_counter:04d}.dat", "wb") as f:
+            dump_obj = {
+                "sel_idxs": sel_idxs,
+                "instance_gen": instance_gen,
+                "labels_gen": labels_gen,
+            }
+            pickle.dump(dump_obj, f)
+        self.sample_conditioning_counter += 1
 
         return labels_gen, instance_gen
 
@@ -814,6 +826,8 @@ class ILSVRC_HDF5_feats(data.Dataset):
         img_nn = self._get_image(idx_nn)
         label_nn = self.get_label(idx_nn)
         feats = self.get_instance_features(idx_h)
+
+        print("image", idx_nn, "label", idx_nn, "feature", idx_h)
 
         return img_nn, label_nn, feats, radii
 

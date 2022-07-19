@@ -597,18 +597,19 @@ class AsyncDatasetWrapper(AsyncDataset[Dict[str, Any]]):
         return len(self.dataset)
 
     async def __getitem__(self, idx: int) -> Dict[str, Any]:
-        feature = self.dataset.get_feature(idx)
-        nns = self.dataset.get_nns(idx)
-        nn_scores = self.dataset.get_nn_scores(idx)
+        #feature = self.dataset.get_feature(idx)
+        #nns = self.dataset.get_nns(idx)
+        #nn_scores = self.dataset.get_nn_scores(idx)
 
-        sampled_nn = np.random.choice(nns, 1)[0]
+        #sampled_nn = np.random.choice(nns, 1)[0]
 
-        return {
-            "idx": idx,
-            "img": self.dataset.get_image_fileobj(sampled_nn).read(),
-            "feats": feature,
-            "radii": nn_scores[-1],
-        }
+        #return {
+        #    "idx": idx,
+        #    "img": self.dataset.get_image_fileobj(sampled_nn).read(),
+        #    "feats": feature,
+        #    "radii": nn_scores[-1],
+        #}
+        return self.dataset.prefetch_data(idx)
 
 
 def async_reader(
@@ -644,19 +645,14 @@ class ImageLoadingIterableDataset(data.IterableDataset):
         self.transform = transform
         self.possible_sampling_idxs = np.arange(self.n_samples)
         self.num_instance_conditionings = 1 
+        self.sample_conditioning_counter = 0
 
     def __iter__(self):
-        from PIL import Image
-        from io import BytesIO
-        for data in self.dataset:
-            fdata = data["img"]
-            if isinstance(fdata, bytes):
-                fdata = BytesIO(fdata)
-            img = Image.open(fdata).convert("RGB")
+        for prefetched_data in self.dataset:
+            data = prefetched_data.load()
             if self.transform is not None:
-                img = self.transform(img)
-            data["img"] = img
-            # yield img, label
+                data = self.transform(data)
+            print("ImageLoadingIterableDataset", data["idx"], "image", data["nn"], "feature", data["idx"])
             yield data
 
     def __len__(self):
@@ -669,6 +665,7 @@ class ImageLoadingIterableDataset(data.IterableDataset):
     def sample_conditioning_instance_balance(self, batch_size, weights=None, sample_random_masks=False):
         sel_idxs = np.random.randint(0, len(self.possible_sampling_idxs), size=(batch_size,))
         sel_idxs = self.possible_sampling_idxs[sel_idxs]
+        print(f"Sample conditioning, sel_idxs: {sel_idxs}")
         hflip = np.random.randint(2, size=len(sel_idxs))
         instance_features = np.concatenate([
             self.dataset.dataset.dataset.get_feature(idx).reshape((1, -1))
@@ -680,6 +677,15 @@ class ImageLoadingIterableDataset(data.IterableDataset):
 
         labels_g = None
         feats_g = torch.from_numpy(instance_features)
+        import pickle
+        with open(f"/checkpoint/vkhalidov/2022_icgan/debug_icgan_vkhalidov/sample_conditionings_{self.sample_conditioning_counter:04d}.dat", "wb") as f:
+            dump_obj = {
+                "sel_idxs": sel_idxs,
+                "instance_gen": instance_features,
+                "labels_gen": labels_g,
+            }
+            pickle.dump(dump_obj, f)
+        self.sample_conditioning_counter += 1
         return labels_g, feats_g
 
 
@@ -687,22 +693,74 @@ class ImageLoadingIndexedDataset(data.Dataset):
 
     def __init__(self, dataset: data.Dataset, transform = None):
         self.dataset = dataset
+        self.n_samples = len(dataset)
         self.transform = transform
+        self.possible_sampling_idxs = np.arange(self.n_samples)
+        self.sample_conditioning_counter = 0
 
     def __getitem__(self, idx):
-        from PIL import Image
-        from io import BytesIO
-        fpath, label = self.dataset[idx]
-        with open(fpath, "rb") as hFile:
-            img = Image.open(hFile).convert("RGB")
+        prefetched_data = self.dataset.prefetch_data(idx)
+        data = prefetched_data.load()
         if self.transform is not None:
-            img = self.transform(img)
+            data = self.transform(data)
+        print("ImageLoadingIterableDataset", data["idx"], "image", data["nn"], "feature", data["idx"])
         #return img, label
-        return {"img": img}
+        return data
 
     def __len__(self):
-        return len(self.dataset)
+        return self.n_samples 
 
+    def sample_conditioning_instance_balance(self, batch_size, weights=None, sample_random_masks=False, feature_augmentation=False, load_labels=False):
+        sel_idxs = np.random.randint(0, len(self.possible_sampling_idxs), size=(batch_size,))
+        sel_idxs = self.possible_sampling_idxs[sel_idxs]
+        print(f"Sample conditioning, sel_idxs: {sel_idxs}")
+        feats = []
+        for idx in sel_idxs:
+            hflip = np.random.randint(2) == 1
+            print(f"sampled hflip for {idx}: {hflip}, feature_augmentation={feature_augmentation}")
+            if feature_augmentation and hflip:
+                feats.append(self.dataset.get_aug_feature(idx).reshape((1, -1)))
+            else:
+                feats.append(self.dataset.get_feature(idx).reshape(1, -1))
+        instance_features = np.concatenate(feats)
+
+        #hflip = np.random.randint(2, size=len(sel_idxs))
+        #instance_features = np.concatenate([
+        #    self.dataset.get_feature(idx).reshape((1, -1))
+        #    if hflip[i] == 0 else
+        #    self.dataset.get_aug_feature(idx).reshape((1, -1))
+        #    for i, idx in enumerate(sel_idxs)
+        #])
+        instance_features /= np.linalg.norm(instance_features, axis=-1, keepdims=True)
+
+        labels_g = []
+        for idx in sel_idxs:
+            chosen_idx = np.random.choice(self.dataset.get_nns(idx))
+            labels_g.append(chosen_idx)
+        if not load_labels:
+            labels_g = None
+
+        feats_g = torch.from_numpy(instance_features)
+        import pickle
+        with open(f"/checkpoint/vkhalidov/2022_icgan/debug_icgan_vkhalidov/sample_conditionings_{self.sample_conditioning_counter:04d}.dat", "wb") as f:
+            dump_obj = {
+                "sel_idxs": sel_idxs,
+                "instance_gen": instance_features,
+                "labels_gen": labels_g,
+            }
+            pickle.dump(dump_obj, f)
+        self.sample_conditioning_counter += 1
+        return labels_g, feats_g
+
+
+
+from torch.utils.data import RandomSampler, DistributedSampler
+
+class FakeSized:
+    def __init__(self, sz):
+        self.sz = sz
+    def __len__(self):
+        return self.sz
 
 class TrainingSampler(Sampler):
     def __init__(self, size: int, dataset_size: int, shuffle: bool = True, seed: int = 0):
@@ -712,17 +770,29 @@ class TrainingSampler(Sampler):
         self._seed = seed
         self._rank = dist.get_rank() if dist.is_initialized() else 0
         self._world_size = dist.get_world_size() if dist.is_initialized() else 1 
+        if self._world_size == 1:
+            self.base_sampler = RandomSampler(FakeSized(self._dataset_size))
+        else:
+            self.base_sampler = DistributedSampler(
+                FakeSized(self._dataset_size),
+                num_replicas = self._world_size,
+                rank = self._rank,
+                shuffle = self._shuffle,
+            )
         self._epoch = 0
 
     def __iter__(self):
+        yield from self.base_sampler
+        """
         import random
         import itertools
         start = self._rank
         seed = self._seed * self._epoch if self._seed != 0 else self._epoch
         random_engine = random.Random(seed)
-        indices_to_choose_from = list(range(self._dataset_size)) * (1 + self._size // self._dataset_size)
+        indices_to_choose_from = list(range(self._dataset_size)) * ((self._size + self._dataset_size - 1) // self._dataset_size)
         indices = random_engine.sample(indices_to_choose_from, self._size)
         yield from itertools.islice(indices, start, None, self._world_size)
+        """
 
     def __len__(self):
         return ((self._size - self._rank) + (self._world_size - 1)) // self._world_size

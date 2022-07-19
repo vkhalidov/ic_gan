@@ -1009,6 +1009,7 @@ class RandomCropLongEdge(object):
 
 # Utility file to seed rngs
 def seed_rng(seed):
+    print("seed torch and numpy", seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     np.random.seed(seed)

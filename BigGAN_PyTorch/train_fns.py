@@ -25,6 +25,9 @@ def dummy_training_function():
     return train
 
 
+TRAIN_COUNTER = 0
+
+
 def GAN_training_function(
     G,
     D,
@@ -38,6 +41,8 @@ def GAN_training_function(
     batch_size=0,
 ):
     def train(x, y=None, features=None):
+        global TRAIN_COUNTER
+        import pickle
         if embedded_optimizers:
             G.optim.zero_grad()
             D.optim.zero_grad()
@@ -84,6 +89,16 @@ def GAN_training_function(
                 if f_g is not None:
                     f_g = f_g[:batch_size].to(device, non_blocking=True)
                 z_ = z_[:batch_size].to(device, non_blocking=True)
+                print(f"save Dstep {TRAIN_COUNTER} accumulation {accumulation_index} to /checkpoint/vkhalidov/2022_icgan/debug_icgan_vkhalidov/train_Dstep_{TRAIN_COUNTER:04d}_{accumulation_index:02d}.dat", flush=True)
+                with open(f"/checkpoint/vkhalidov/2022_icgan/debug_icgan_vkhalidov/train_Dstep_{TRAIN_COUNTER:04d}_{accumulation_index:02d}.dat", "wb") as dump_f:
+                    dump_obj = {
+                        "x": x[counter].cpu().numpy(),
+                        "y": y[counter].cpu().numpy() if y is not None else None,
+                        "z": z_.cpu().numpy(),
+                        "labels": labels_g.cpu().numpy() if labels_g is not None else None,
+                        "features": f_g.cpu().numpy() if f_g is not None else None,
+                    }
+                    pickle.dump(dump_obj, dump_f)
                 # Obtain discriminator scores
                 D_fake, D_real = GD(
                     z_,
@@ -147,6 +162,14 @@ def GAN_training_function(
             if f_g is not None:
                 f_g = f_g.to(device, non_blocking=True)
             z_ = z_.to(device, non_blocking=True)
+            print(f"save Gstep {TRAIN_COUNTER} accumulation {accumulation_index} to /checkpoint/vkhalidov/2022_icgan/debug_icgan_vkhalidov/train_Gstep_{TRAIN_COUNTER:04d}_{accumulation_index:02d}.dat", flush=True)
+            with open(f"/checkpoint/vkhalidov/2022_icgan/debug_icgan_vkhalidov/train_Gstep_{TRAIN_COUNTER:04d}_{accumulation_index:02d}.dat", "wb") as dump_f:
+                dump_obj = {
+                    "z": z_.cpu().numpy(),
+                    "labels": labels_g.cpu().numpy() if labels_g is not None else None,
+                    "features": f_g.cpu().numpy() if f_g is not None else None,
+                }
+                pickle.dump(dump_obj, dump_f)
             # Obtain discriminator scores
             D_fake = GD(
                 z_,
@@ -189,6 +212,7 @@ def GAN_training_function(
             "D_loss_fake": float(D_loss_fake.item()),
         }
         # Return G's loss and the components of D's loss.
+        TRAIN_COUNTER += 1
         return out
 
     return train
