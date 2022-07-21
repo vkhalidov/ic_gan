@@ -454,7 +454,7 @@ class LavidaHDF5PrefetchedData:
         return {
             "idx": self.index,
             "img": (torch.from_numpy(self.image).float() / 255 - 0.5) * 2,
-            "feats": self.feature,
+            "feats": self.feature / np.linalg.norm(self.feature, keepdims=True),
             "nn": self.nn
         }
 
@@ -496,9 +496,9 @@ class LavidaHDF5Dataset(data.Dataset):
         hflip = np.random.randint(2) == 1
         print(f"sampled hflip: {hflip}")
         if self.feature_augmentation and hflip:
-            feat = self.features_fh["feats_hflip"][index]
+            feat = self.features_fh["feats_hflip"][index].astype("float")
         else:
-            feat = self.features_fh["feats"][index]
+            feat = self.features_fh["feats"][index].astype("float")
 
         return LavidaHDF5PrefetchedData(
             index,
@@ -507,9 +507,9 @@ class LavidaHDF5Dataset(data.Dataset):
             sampled_nn,
         )
     def get_feature(self, idx):
-        return self.features_fh["feats"][idx].astype(np.float32)
+        return self.features_fh["feats"][idx].astype("float")
     def get_aug_feature(self, idx):
-        return self.features_fh["feats_hflip"][idx].astype(np.float32)
+        return self.features_fh["feats_hflip"][idx].astype("float")
     def get_nns(self, idx):
         return self.nns_fh["sample_nns"][idx]
     def __len__(self):

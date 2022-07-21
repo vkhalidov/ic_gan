@@ -740,7 +740,7 @@ class ImageLoadingIndexedDataset(data.Dataset):
         if not load_labels:
             labels_g = None
 
-        feats_g = torch.from_numpy(instance_features)
+        feats_g = torch.FloatTensor(instance_features)
         import pickle
         with open(f"/checkpoint/vkhalidov/2022_icgan/debug_icgan_vkhalidov/sample_conditionings_{self.sample_conditioning_counter:04d}.dat", "wb") as f:
             dump_obj = {
