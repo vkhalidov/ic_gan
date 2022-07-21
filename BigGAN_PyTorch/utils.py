@@ -1133,7 +1133,7 @@ def save_weights(
 ):
     root = "/".join([weights_root, experiment_name])
     if not os.path.exists(root):
-        os.mkdir(root)
+        os.makedirs(root, exist_ok = True)
     if name_suffix:
         print("Saving weights to %s/%s..." % (root, name_suffix))
     else:
