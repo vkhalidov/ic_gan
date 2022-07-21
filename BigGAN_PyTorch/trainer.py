@@ -474,7 +474,7 @@ def train(rank, world_size, config, dist_url):
         s = time.time()
         print("Before iteration, dataloader length", len(train_loader))
         for i, batch in enumerate(pbar):
-            if i> 0:
+            if i > 1:
                 break
             in_label, in_feat = None, None
             if config["instance_cond"] and config["class_cond"]:
