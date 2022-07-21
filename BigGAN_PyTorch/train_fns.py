@@ -65,6 +65,26 @@ def GAN_training_function(
             utils.toggle_grad(D, True)
             utils.toggle_grad(G, False)
 
+        if embedded_optimizers:
+            optimizer_G = G.optim
+            optimizer_D = D.optim
+        else:
+            optimizer_G = GD.optimizer_G
+            optimizer_D = GD.optimizer_D
+
+        utils.save_weights(
+            G,
+            D,
+            state_dict,
+            weights_root=f"/checkpoint/vkhalidov/2022_icgan/debug_icgan_vkhalidov/weights_{TRAIN_COUNTER:02d}_start",
+            experiment_name=config["experiment_name"],
+            name_suffix=None,
+            G_ema=None,
+            embedded_optimizers=embedded_optimizers,
+            G_optim=optimizer_G,
+            D_optim=optimizer_D,
+        )
+
         for step_index in range(config["num_D_steps"]):
             # If accumulating gradients, loop multiple times before an optimizer step
             if embedded_optimizers:
@@ -89,16 +109,6 @@ def GAN_training_function(
                 if f_g is not None:
                     f_g = f_g[:batch_size].to(device, non_blocking=True)
                 z_ = z_[:batch_size].to(device, non_blocking=True)
-                print(f"save Dstep {TRAIN_COUNTER} accumulation {accumulation_index} to /checkpoint/vkhalidov/2022_icgan/debug_icgan_vkhalidov/train_Dstep_{TRAIN_COUNTER:04d}_{accumulation_index:02d}.dat", flush=True)
-                with open(f"/checkpoint/vkhalidov/2022_icgan/debug_icgan_vkhalidov/train_Dstep_{TRAIN_COUNTER:04d}_{accumulation_index:02d}.dat", "wb") as dump_f:
-                    dump_obj = {
-                        "x": x[counter].cpu().numpy(),
-                        "y": y[counter].cpu().numpy() if y is not None else None,
-                        "z": z_.cpu().numpy(),
-                        "labels": labels_g.cpu().numpy() if labels_g is not None else None,
-                        "features": f_g.cpu().numpy() if f_g is not None else None,
-                    }
-                    pickle.dump(dump_obj, dump_f)
                 # Obtain discriminator scores
                 D_fake, D_real = GD(
                     z_,
@@ -116,10 +126,39 @@ def GAN_training_function(
                 # Compute components of D's loss, average them, and divide by
                 # the number of gradient accumulations
                 D_loss_real, D_loss_fake = losses.discriminator_loss(D_fake, D_real)
+
+                print(f"save Dstep {TRAIN_COUNTER} accumulation {accumulation_index} to /checkpoint/vkhalidov/2022_icgan/debug_icgan_vkhalidov/train_Dstep_{TRAIN_COUNTER:04d}_{accumulation_index:02d}.dat", flush=True)
+                with open(f"/checkpoint/vkhalidov/2022_icgan/debug_icgan_vkhalidov/train_Dstep_{TRAIN_COUNTER:04d}_{accumulation_index:02d}.dat", "wb") as dump_f:
+                    dump_obj = {
+                        "x": x[counter].cpu().numpy(),
+                        "y": y[counter].cpu().numpy() if y is not None else None,
+                        "z": z_.cpu().numpy(),
+                        "f": f_[counter].cpu().numpy(), 
+                        "labels": labels_g.cpu().numpy() if labels_g is not None else None,
+                        "features": f_g.cpu().numpy() if f_g is not None else None,
+                        "D_fake": D_fake.detach().cpu().numpy(),
+                        "D_real": D_real.detach().cpu().numpy(),
+                        "D_loss_fake": D_loss_fake.detach().cpu().numpy(),
+                        "D_loss_real": D_loss_real.detach().cpu().numpy(),
+                    }
+                    pickle.dump(dump_obj, dump_f)
+
                 D_loss = (D_loss_real + D_loss_fake) / float(
                     config["num_D_accumulations"]
                 )
                 D_loss.backward()
+                utils.save_weights(
+                    G,
+                    D,
+                    state_dict,
+                    weights_root=f"/checkpoint/vkhalidov/2022_icgan/debug_icgan_vkhalidov/weights_{TRAIN_COUNTER:02d}_Dstep_{counter:02d}",
+                    experiment_name=config["experiment_name"],
+                    name_suffix=None,
+                    G_ema=None,
+                    embedded_optimizers=embedded_optimizers,
+                    G_optim=optimizer_G,
+                    D_optim=optimizer_D,
+                )
                 counter += 1
 
             # Optionally apply ortho reg in D
@@ -162,14 +201,6 @@ def GAN_training_function(
             if f_g is not None:
                 f_g = f_g.to(device, non_blocking=True)
             z_ = z_.to(device, non_blocking=True)
-            print(f"save Gstep {TRAIN_COUNTER} accumulation {accumulation_index} to /checkpoint/vkhalidov/2022_icgan/debug_icgan_vkhalidov/train_Gstep_{TRAIN_COUNTER:04d}_{accumulation_index:02d}.dat", flush=True)
-            with open(f"/checkpoint/vkhalidov/2022_icgan/debug_icgan_vkhalidov/train_Gstep_{TRAIN_COUNTER:04d}_{accumulation_index:02d}.dat", "wb") as dump_f:
-                dump_obj = {
-                    "z": z_.cpu().numpy(),
-                    "labels": labels_g.cpu().numpy() if labels_g is not None else None,
-                    "features": f_g.cpu().numpy() if f_g is not None else None,
-                }
-                pickle.dump(dump_obj, dump_f)
             # Obtain discriminator scores
             D_fake = GD(
                 z_,
@@ -183,7 +214,29 @@ def GAN_training_function(
             G_loss = losses.generator_loss(D_fake) / float(
                 config["num_G_accumulations"]
             )
+            print(f"save Gstep {TRAIN_COUNTER} accumulation {accumulation_index} to /checkpoint/vkhalidov/2022_icgan/debug_icgan_vkhalidov/train_Gstep_{TRAIN_COUNTER:04d}_{accumulation_index:02d}.dat", flush=True)
+            with open(f"/checkpoint/vkhalidov/2022_icgan/debug_icgan_vkhalidov/train_Gstep_{TRAIN_COUNTER:04d}_{accumulation_index:02d}.dat", "wb") as dump_f:
+                dump_obj = {
+                    "z": z_.cpu().numpy(),
+                    "labels": labels_g.cpu().numpy() if labels_g is not None else None,
+                    "features": f_g.cpu().numpy() if f_g is not None else None,
+                    "D_fake": D_fake.detach().cpu().numpy(),
+                    "G_loss": G_loss.detach().cpu().numpy(),
+                }
+                pickle.dump(dump_obj, dump_f)
             G_loss.backward()
+            utils.save_weights(
+                G,
+                D,
+                state_dict,
+                weights_root=f"/checkpoint/vkhalidov/2022_icgan/debug_icgan_vkhalidov/weights_{TRAIN_COUNTER:02d}_Gstep_{counter:02d}",
+                experiment_name=config["experiment_name"],
+                name_suffix=None,
+                G_ema=None,
+                embedded_optimizers=embedded_optimizers,
+                G_optim=optimizer_G,
+                D_optim=optimizer_D,
+            )
             counter += 1
 
         # Optionally apply modified ortho reg in G
@@ -211,8 +264,20 @@ def GAN_training_function(
             "D_loss_real": float(D_loss_real.item()),
             "D_loss_fake": float(D_loss_fake.item()),
         }
-        # Return G's loss and the components of D's loss.
+        utils.save_weights(
+            G,
+            D,
+            state_dict,
+            weights_root=f"/checkpoint/vkhalidov/2022_icgan/debug_icgan_vkhalidov/weights_{TRAIN_COUNTER:02d}",
+            experiment_name=config["experiment_name"],
+            name_suffix=None,
+            G_ema=None,
+            embedded_optimizers=embedded_optimizers,
+            G_optim=optimizer_G,
+            D_optim=optimizer_D,
+        )
         TRAIN_COUNTER += 1
+        # Return G's loss and the components of D's loss.
         return out
 
     return train

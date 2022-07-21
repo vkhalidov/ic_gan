@@ -745,7 +745,7 @@ class ImageLoadingIndexedDataset(data.Dataset):
         with open(f"/checkpoint/vkhalidov/2022_icgan/debug_icgan_vkhalidov/sample_conditionings_{self.sample_conditioning_counter:04d}.dat", "wb") as f:
             dump_obj = {
                 "sel_idxs": sel_idxs,
-                "instance_gen": instance_features,
+                "instance_gen": feats_g,
                 "labels_gen": labels_g,
             }
             pickle.dump(dump_obj, f)
