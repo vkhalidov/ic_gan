@@ -669,17 +669,28 @@ class ImageLoadingIterableDataset(data.IterableDataset):
     def sample_conditioning_instance_balance(self, batch_size, weights=None, sample_random_masks=False):
         sel_idxs = np.random.randint(0, len(self.possible_sampling_idxs), size=(batch_size,))
         sel_idxs = self.possible_sampling_idxs[sel_idxs]
-        hflip = np.random.randint(2, size=len(sel_idxs))
-        instance_features = np.concatenate([
-            self.dataset.dataset.dataset.get_feature(idx).reshape((1, -1))
-            if hflip[i] == 0 else
-            self.dataset.dataset.dataset.get_aug_feature(idx).reshape((1, -1))
-            for i, idx in enumerate(sel_idxs)
-        ])
+
+        feats = []
+        for idx in sel_idxs:
+            hflip = np.random.randint(2) == 1
+            print(f"sampled hflip for {idx}: {hflip}, feature_augmentation={feature_augmentation}")
+            if feature_augmentation and hflip:
+                feats.append(self.dataset.get_aug_feature(idx).reshape((1, -1)))
+            else:
+                feats.append(self.dataset.get_feature(idx).reshape(1, -1))
+        instance_features = np.concatenate(feats)
+
+        #hflip = np.random.randint(2, size=len(sel_idxs))
+        #instance_features = np.concatenate([
+        #    self.dataset.dataset.dataset.get_feature(idx).reshape((1, -1))
+        #    if hflip[i] == 0 else
+        #    self.dataset.dataset.dataset.get_aug_feature(idx).reshape((1, -1))
+        #    for i, idx in enumerate(sel_idxs)
+        #])
         instance_features /= np.linalg.norm(instance_features, axis=-1, keepdims=True)
 
         labels_g = None
-        feats_g = torch.from_numpy(instance_features)
+        feats_g = torch.FloatTensor(instance_features)
         return labels_g, feats_g
 
 
@@ -703,6 +714,48 @@ class ImageLoadingIndexedDataset(data.Dataset):
     def __len__(self):
         return len(self.dataset)
 
+    def sample_conditioning_instance_balance(self, batch_size, weights=None, sample_random_masks=False, feature_augmentation=False, load_labels=False):
+        sel_idxs = np.random.randint(0, len(self.possible_sampling_idxs), size=(batch_size,))
+        sel_idxs = self.possible_sampling_idxs[sel_idxs]
+        print(f"Sample conditioning, sel_idxs: {sel_idxs}")
+        feats = []
+        for idx in sel_idxs:
+            hflip = np.random.randint(2) == 1
+            print(f"sampled hflip for {idx}: {hflip}, feature_augmentation={feature_augmentation}")
+            if feature_augmentation and hflip:
+                feats.append(self.dataset.get_aug_feature(idx).reshape((1, -1)))
+            else:
+                feats.append(self.dataset.get_feature(idx).reshape(1, -1))
+        instance_features = np.concatenate(feats)
+
+        #hflip = np.random.randint(2, size=len(sel_idxs))
+        #instance_features = np.concatenate([
+        #    self.dataset.get_feature(idx).reshape((1, -1))
+        #    if hflip[i] == 0 else
+        #    self.dataset.get_aug_feature(idx).reshape((1, -1))
+        #    for i, idx in enumerate(sel_idxs)
+        #])
+        instance_features /= np.linalg.norm(instance_features, axis=-1, keepdims=True)
+
+        labels_g = []
+        for idx in sel_idxs:
+            chosen_idx = np.random.choice(self.dataset.get_nns(idx))
+            labels_g.append(chosen_idx)
+        if not load_labels:
+            labels_g = None
+
+        feats_g = torch.FloatTensor(instance_features)
+        return labels_g, feats_g
+
+
+
+from torch.utils.data import RandomSampler, DistributedSampler
+
+class FakeSized:
+    def __init__(self, sz):
+        self.sz = sz
+    def __len__(self):
+        return self.sz
 
 class TrainingSampler(Sampler):
     def __init__(self, size: int, dataset_size: int, shuffle: bool = True, seed: int = 0):

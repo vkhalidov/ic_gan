@@ -442,6 +442,78 @@ def get_dataset_images(
     return dataset
 
 
+class LavidaHDF5PrefetchedData:
+    def __init__(self, index, image, feature, nn):
+        self.index = index
+        self.image = image
+        self.feature = feature
+        self.nn = nn
+    def load(self):
+        return {
+            "idx": self.index,
+            "img": (torch.from_numpy(self.image).float() / 255 - 0.5) * 2,
+            "feats": self.feature / np.linalg.norm(self.feature, keepdims=True),
+            "nn": self.nn
+        }
+
+
+class LavidaHDF5Transform:
+    def __init__(self, image_transform=None, feature_transform=None):
+        self.image_transform = image_transform
+        self.feature_transform = feature_transform
+    def __call__(self, data):
+        return {
+            "idx": data["idx"],
+            "nn": data["nn"],
+            "img": data["img"] if self.image_transform is None else self.image_transform(data["img"]),
+            "feats": data["feats"] if self.feature_transform is None else self.feature_transform(data["feats"]),
+        }
+
+
+class LavidaHDF5Dataset(data.Dataset):
+    def __init__(
+        self,
+        images_labels_fpath,
+        features_fpath,
+        nns_fpath,
+        num_instance_conditionings,
+        sample_images_from_nn: bool = True,
+        feature_augmentation: bool = False
+    ):
+        self.images_labels_fpath = images_labels_fpath
+        self.features_fpath = features_fpath
+        self.nns_fpath = nns_fpath
+        self.images_labels_fh = h5.File(images_labels_fpath, "r")
+        self.features_fh = h5.File(features_fpath, "r")
+        self.nns_fh = h5.File(nns_fpath, "r")
+        self.feature_augmentation = feature_augmentation
+    def prefetch_data(self, index):
+        nns = self.nns_fh["sample_nns"][index]
+        sampled_nn = np.random.choice(nns)
+        print(f"sampled_nn for {index}: {sampled_nn}")
+        hflip = np.random.randint(2) == 1
+        print(f"sampled hflip: {hflip}")
+        if self.feature_augmentation and hflip:
+            feat = self.features_fh["feats_hflip"][index].astype("float")
+        else:
+            feat = self.features_fh["feats"][index].astype("float")
+
+        return LavidaHDF5PrefetchedData(
+            index,
+            self.images_labels_fh["imgs"][sampled_nn],
+            feat,
+            sampled_nn,
+        )
+    def get_feature(self, idx):
+        return self.features_fh["feats"][idx].astype("float")
+    def get_aug_feature(self, idx):
+        return self.features_fh["feats_hflip"][idx].astype("float")
+    def get_nns(self, idx):
+        return self.nns_fh["sample_nns"][idx]
+    def __len__(self):
+        return len(self.images_labels_fh["imgs"])
+
+
 class LavidaILSVRCDataset(data.Dataset):
 
     def __init__(self, lavida_dataset, features_fpath, aug_features_fpath, nn_fpath, nn_scores_fpath, features_dim, nn_count, num_instance_conditionings, sample_images_from_nn: bool = True, feature_augmentation: bool = False):
