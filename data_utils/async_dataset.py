@@ -597,18 +597,7 @@ class AsyncDatasetWrapper(AsyncDataset[Dict[str, Any]]):
         return len(self.dataset)
 
     async def __getitem__(self, idx: int) -> Dict[str, Any]:
-        feature = self.dataset.get_feature(idx)
-        nns = self.dataset.get_nns(idx)
-        nn_scores = self.dataset.get_nn_scores(idx)
-
-        sampled_nn = np.random.choice(nns, 1)[0]
-
-        return {
-            "idx": idx,
-            "img": self.dataset.get_image_fileobj(sampled_nn).read(),
-            "feats": feature,
-            "radii": nn_scores[-1],
-        }
+        return self.dataset.prefetch_data(idx)
 
 
 def async_reader(
@@ -646,17 +635,10 @@ class ImageLoadingIterableDataset(data.IterableDataset):
         self.num_instance_conditionings = 1 
 
     def __iter__(self):
-        from PIL import Image
-        from io import BytesIO
-        for data in self.dataset:
-            fdata = data["img"]
-            if isinstance(fdata, bytes):
-                fdata = BytesIO(fdata)
-            img = Image.open(fdata).convert("RGB")
+        for prefetched_data in self.dataset:
+            data = prefetched_data.load()
             if self.transform is not None:
-                img = self.transform(img)
-            data["img"] = img
-            # yield img, label
+                data = self.transform(data)
             yield data
 
     def __len__(self):
@@ -666,18 +648,21 @@ class ImageLoadingIterableDataset(data.IterableDataset):
     def sampler(self) -> int:
         return self.dataset.sampler
 
-    def sample_conditioning_instance_balance(self, batch_size, weights=None, sample_random_masks=False):
+    def sample_conditioning_instance_balance(self, batch_size, weights=None, sample_random_masks=False, feature_augmentation=False, load_labels=False):
         sel_idxs = np.random.randint(0, len(self.possible_sampling_idxs), size=(batch_size,))
         sel_idxs = self.possible_sampling_idxs[sel_idxs]
 
+        # self.dataset: AsyncToIterableDataset
+        #     .dataset: AsyncDatasetWrapper
+        #     .dataset: LavidaHDF5Dataset
         feats = []
         for idx in sel_idxs:
             hflip = np.random.randint(2) == 1
             print(f"sampled hflip for {idx}: {hflip}, feature_augmentation={feature_augmentation}")
             if feature_augmentation and hflip:
-                feats.append(self.dataset.get_aug_feature(idx).reshape((1, -1)))
+                feats.append(self.dataset.dataset.dataset.get_aug_feature(idx).reshape((1, -1)))
             else:
-                feats.append(self.dataset.get_feature(idx).reshape(1, -1))
+                feats.append(self.dataset.dataset.dataset.get_feature(idx).reshape(1, -1))
         instance_features = np.concatenate(feats)
 
         #hflip = np.random.randint(2, size=len(sel_idxs))
@@ -698,21 +683,19 @@ class ImageLoadingIndexedDataset(data.Dataset):
 
     def __init__(self, dataset: data.Dataset, transform = None):
         self.dataset = dataset
+        self.n_samples = len(dataset)
         self.transform = transform
+        self.possible_sampling_idxs = np.arange(self.n_samples)
 
     def __getitem__(self, idx):
-        from PIL import Image
-        from io import BytesIO
-        fpath, label = self.dataset[idx]
-        with open(fpath, "rb") as hFile:
-            img = Image.open(hFile).convert("RGB")
+        prefetched_data = self.dataset.prefetch_data(idx)
+        data = prefetched_data.load()
         if self.transform is not None:
-            img = self.transform(img)
-        #return img, label
-        return {"img": img}
+            data = self.transform(data)
+        return data
 
     def __len__(self):
-        return len(self.dataset)
+        return self.n_samples 
 
     def sample_conditioning_instance_balance(self, batch_size, weights=None, sample_random_masks=False, feature_augmentation=False, load_labels=False):
         sel_idxs = np.random.randint(0, len(self.possible_sampling_idxs), size=(batch_size,))
@@ -723,9 +706,9 @@ class ImageLoadingIndexedDataset(data.Dataset):
             hflip = np.random.randint(2) == 1
             print(f"sampled hflip for {idx}: {hflip}, feature_augmentation={feature_augmentation}")
             if feature_augmentation and hflip:
-                feats.append(self.dataset.get_aug_feature(idx).reshape((1, -1)))
+                feats.append(self.dataset.dataset.dataset.get_aug_feature(idx).reshape((1, -1)))
             else:
-                feats.append(self.dataset.get_feature(idx).reshape(1, -1))
+                feats.append(self.dataset.dataset.dataset.get_feature(idx).reshape(1, -1))
         instance_features = np.concatenate(feats)
 
         #hflip = np.random.randint(2, size=len(sel_idxs))
