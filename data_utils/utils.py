@@ -453,7 +453,7 @@ class LavidaHDF5PrefetchedData:
         return {
             "idx": self.index,
             "img": (torch.from_numpy(self.image).float() / 255 - 0.5) * 2,
-            "feats": self.feature,
+            "feats": self.feature / np.linalg.norm(self.feature, keepdims=True),
             "nn": self.nn
         }
 
@@ -799,6 +799,7 @@ def get_dataloader_lavida(
         num_workers=num_workers,
         pin_memory=pin_memory,
         drop_last=drop_last,
+        shuffle=shuffle,
     )
     return loader
 
