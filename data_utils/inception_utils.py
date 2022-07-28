@@ -140,6 +140,13 @@ def torch_cov(m, rowvar=False):
     return fact * m.matmul(mt).squeeze()
 
 
+def compute_error(A, sA):
+    normA = torch.sqrt(torch.sum(torch.sum(A * A, dim=1),dim=1))
+    error = A - torch.bmm(sA, sA)
+    error = torch.sqrt((error * error).sum(dim=1).sum(dim=1)) / normA
+    return torch.mean(error)
+
+
 # Pytorch implementation of matrix sqrt, from Tsung-Yu Lin, and Subhransu Maji
 # https://github.com/msubhransu/matrix-sqrt
 def sqrt_newton_schulz(A, numIters, dtype=None):
@@ -150,12 +157,20 @@ def sqrt_newton_schulz(A, numIters, dtype=None):
         dim = A.shape[1]
         normA = A.mul(A).sum(dim=1).sum(dim=1).sqrt()
         Y = A.div(normA.view(batchSize, 1, 1).expand_as(A))
+        sA = Y*torch.sqrt(normA).view(batchSize, 1, 1).expand_as(A)
+        err = compute_error(A, sA).item()
         I = torch.eye(dim, dim).view(1, dim, dim).repeat(batchSize, 1, 1).type(dtype)
         Z = torch.eye(dim, dim).view(1, dim, dim).repeat(batchSize, 1, 1).type(dtype)
         for i in range(numIters):
             T = 0.5 * (3.0 * I - Z.bmm(Y))
-            Y = Y.bmm(T)
+            Ynew = Y.bmm(T)
+            sA = Ynew*torch.sqrt(normA).view(batchSize, 1, 1).expand_as(A)
+            err_new = compute_error(A, sA).item()
+            if err_new > err:
+                break
+            Y = Ynew
             Z = T.bmm(Z)
+            err = err_new
         sA = Y * torch.sqrt(normA).view(batchSize, 1, 1).expand_as(A)
     return sA
 
@@ -316,25 +331,15 @@ def accumulate_inception_activations(sample, net, num_inception_images=50000, mo
             if labels_val is not None:
                 assert batch_size == labels_val.shape[0], f"pool shape {pool_val.shape}, labels shape {labels_val.shape}"
                 labels[offset : offset + assign_size] = labels_val[:assign_size]
-            #pool.append(pool_val.cpu())
-            #logits.append(logits_val)
-            #labels.append(labels_val)
             offset += assign_size
-            #sample_count += logits_val.shape[0]
             if next_log_point_idx < len(log_points) and log_points[next_log_point_idx] <= offset:
                 next_log_point_idx += 1
                 t2 = time.perf_counter()
                 eta_s = (t2-t1) * num_inception_images / offset
                 print(f"Accumulated {offset}/{num_inception_images} activations in {t2-t1}s (ETA:{str(datetime.timedelta(seconds=eta_s))}s)")
-            #print(f"Added {assign_size}/{batch_size} samples; logits ({logits_val.shape}, {logits_val.dtype}, {logits_val.device}), pool ({pool_val.shape}, {pool_val.dtype}, {pool_val.device}), {labels_val}, {t2-t1}s")
     print(f"Finished accumulating {num_inception_images} activations, took {str(datetime.timedelta(seconds=t2-t1))}")
     return (
             pool, logits, labels
-        #torch.cat(pool, 0),
-        #torch.cat(logits, 0),
-        #torch.cat(labels, 0)
-        #if labels[0] is not None
-        #else torch.zeros(torch.cat(logits, 0).shape[0]).long(),
     )
 
 
