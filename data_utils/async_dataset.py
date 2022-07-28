@@ -748,20 +748,23 @@ class TrainingSampler(Sampler):
         self._seed = seed
         self._rank = dist.get_rank() if dist.is_initialized() else 0
         self._world_size = dist.get_world_size() if dist.is_initialized() else 1 
+        if self._world_size == 1:
+            self.base_sampler = RandomSampler(FakeSized(self._dataset_size))
+        else:
+            self.base_sampler = DistributedSampler(
+                FakeSized(self._dataset_size),
+                num_replicas = self._world_size
+                rank = self._rank,
+                shuffle = self._shuffle,
+            )
         self._epoch = 0
 
     def __iter__(self):
-        import random
-        import itertools
-        start = self._rank
-        seed = self._seed * self._epoch if self._seed != 0 else self._epoch
-        random_engine = random.Random(seed)
-        indices_to_choose_from = list(range(self._dataset_size)) * (1 + self._size // self._dataset_size)
-        indices = random_engine.sample(indices_to_choose_from, self._size)
-        yield from itertools.islice(indices, start, None, self._world_size)
+        yield from self.base_sampler
 
     def __len__(self):
         return ((self._size - self._rank) + (self._world_size - 1)) // self._world_size
 
     def set_epoch(self, epoch):
-        self._epoch = epoch
+        if selt._world_size != 1:
+            self.base_sampler.set_epoch(epoch)
