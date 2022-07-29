@@ -753,7 +753,7 @@ class TrainingSampler(Sampler):
         else:
             self.base_sampler = DistributedSampler(
                 FakeSized(self._dataset_size),
-                num_replicas = self._world_size
+                num_replicas = self._world_size,
                 rank = self._rank,
                 shuffle = self._shuffle,
             )
