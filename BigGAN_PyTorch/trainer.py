@@ -109,7 +109,7 @@ def train(rank, world_size, config, dist_url):
         else:
             rank = int(os.environ.get("SLURM_PROCID"))
             local_rank = int(os.environ.get("SLURM_LOCALID"))
-            copy_locally = True
+            #copy_locally = True
             tmp_dir = "/scratch/slurm_tmpdir/" + str(os.environ.get("SLURM_JOB_ID"))
 
         print("Before setting process group")
@@ -134,6 +134,8 @@ def train(rank, world_size, config, dist_url):
     utils.seed_rng(config["seed"] + rank)
 
     # Setup cudnn.benchmark for free speed
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
     torch.backends.cudnn.benchmark = True
     if config["deterministic_run"]:
         torch.backends.cudnn.deterministic = True
