@@ -740,21 +740,22 @@ def get_dataset_lavida(
         transform_list.append(transforms.RandomHorizontalFlip())
     transform = transforms.Compose(transform_list)
 
-    from data_utils.async_dataset import async_reader, ImageLoadingIterableDataset, TrainingSampler
+    from data_utils.async_dataset import async_reader, ImageLoadingIterableDataset, ImageLoadingIndexedDataset, TrainingSampler
     import large_vision_dataset.factory as lavida_factory
     print(f"Creating lavida dataset {dataset_spec}")
     dataset_lavida = lavida_factory.make_dataset_with_transform(dataset_spec)
     dataset_lavida_ex = LavidaILSVRCDataset(dataset_lavida, features_fpath, aug_features_fpath, nn_fpath, nn_scores_fpath, features_dim, nn_count=k_nn, num_instance_conditionings=num_instance_conditionings, feature_augmentation=feature_augmentation)
     if not is_async:
         return dataset_lavida_ex
-    n_samples = len(dataset_lavida)
-    sampler = TrainingSampler(size=n_samples, dataset_size=n_samples, seed=seed)
-    dataset_rawdata_labels = async_reader(
-        dataset_lavida_ex,
-        sampler=sampler,
-        max_prefetch=64,
-    )
-    dataset = ImageLoadingIterableDataset(dataset_rawdata_labels, transform)
+    #n_samples = len(dataset_lavida)
+    #sampler = TrainingSampler(size=n_samples, dataset_size=n_samples, seed=seed)
+    #dataset_rawdata_labels = async_reader(
+    #    dataset_lavida_ex,
+    #    sampler=sampler,
+    #    max_prefetch=64,
+    #)
+    #dataset = ImageLoadingIterableDataset(dataset_rawdata_labels, transform)
+    dataset = ImageLoadingIndexedDataset(dataset_lavida_ex, transform)
     return dataset
 
 
