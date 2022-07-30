@@ -658,7 +658,7 @@ class ImageLoadingIterableDataset(data.IterableDataset):
         feats = []
         for idx in sel_idxs:
             hflip = np.random.randint(2) == 1
-            print(f"sampled hflip for {idx}: {hflip}, feature_augmentation={feature_augmentation}")
+            #print(f"sampled hflip for {idx}: {hflip}, feature_augmentation={feature_augmentation}")
             if feature_augmentation and hflip:
                 feats.append(self.dataset.dataset.dataset.get_aug_feature(idx).reshape((1, -1)))
             else:
@@ -700,11 +700,11 @@ class ImageLoadingIndexedDataset(data.Dataset):
     def sample_conditioning_instance_balance(self, batch_size, weights=None, sample_random_masks=False, feature_augmentation=False, load_labels=False):
         sel_idxs = np.random.randint(0, len(self.possible_sampling_idxs), size=(batch_size,))
         sel_idxs = self.possible_sampling_idxs[sel_idxs]
-        print(f"Sample conditioning, sel_idxs: {sel_idxs}")
+        #print(f"Sample conditioning, sel_idxs: {sel_idxs}")
         feats = []
         for idx in sel_idxs:
             hflip = np.random.randint(2) == 1
-            print(f"sampled hflip for {idx}: {hflip}, feature_augmentation={feature_augmentation}")
+            #print(f"sampled hflip for {idx}: {hflip}, feature_augmentation={feature_augmentation}")
             if feature_augmentation and hflip:
                 feats.append(self.dataset.dataset.dataset.get_aug_feature(idx).reshape((1, -1)))
             else:
@@ -753,7 +753,7 @@ class TrainingSampler(Sampler):
         else:
             self.base_sampler = DistributedSampler(
                 FakeSized(self._dataset_size),
-                num_replicas = self._world_size
+                num_replicas = self._world_size,
                 rank = self._rank,
                 shuffle = self._shuffle,
             )
