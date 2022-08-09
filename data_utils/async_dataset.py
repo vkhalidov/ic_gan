@@ -706,9 +706,11 @@ class ImageLoadingIndexedDataset(data.Dataset):
             hflip = np.random.randint(2) == 1
             #print(f"sampled hflip for {idx}: {hflip}, feature_augmentation={feature_augmentation}")
             if feature_augmentation and hflip:
-                feats.append(self.dataset.dataset.dataset.get_aug_feature(idx).reshape((1, -1)))
+                #feats.append(self.dataset.dataset.dataset.get_aug_feature(idx).reshape((1, -1)))
+                feats.append(self.dataset.get_aug_feature(idx).reshape((1, -1)))
             else:
-                feats.append(self.dataset.dataset.dataset.get_feature(idx).reshape(1, -1))
+                #feats.append(self.dataset.dataset.dataset.get_feature(idx).reshape(1, -1))
+                feats.append(self.dataset.get_feature(idx).reshape(1, -1))
         instance_features = np.concatenate(feats)
 
         #hflip = np.random.randint(2, size=len(sel_idxs))

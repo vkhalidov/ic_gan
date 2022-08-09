@@ -450,11 +450,29 @@ class LavidaHDF5PrefetchedData:
         self.feature = feature
         self.nn = nn
     def load(self):
+        # image: 0..255 -> -1.0..1.0
         return {
             "idx": self.index,
             "img": (torch.from_numpy(self.image).float() / 255 - 0.5) * 2,
             "feats": self.feature / np.linalg.norm(self.feature, keepdims=True),
             "nn": self.nn
+        }
+
+
+class LavidaPrefetchedData:
+    def __init__(self, index, image, feature, nn):
+        self.index = index
+        self.image = image
+        self.feature = feature
+        self.nn = nn
+    def load(self):
+        # img: [-1, 1]
+        return {
+            "idx": np.int64(self.index),
+            #"img": (torch.from_numpy(self.image.convert("RGB")).float() / 255 - 0.5) * 2,
+            "img": self.image.convert("RGB"),
+            "feats": self.feature / np.linalg.norm(self.feature, keepdims=True),
+            "nn": np.int64(self.nn)
         }
 
 
@@ -543,6 +561,23 @@ class LavidaILSVRCDataset(data.Dataset):
 
     def get_nn_scores(self, idx):
         return self.nn_scores_arr[idx]
+
+    def prefetch_data(self, index):
+        from PIL import Image
+        nns = self.get_nns(index)
+        sampled_nn = np.random.choice(nns)
+        hflip = np.random.randint(2) == 1
+        if self.feature_augmentation and hflip:
+            feat = self.get_feature(index).astype("float")
+        else:
+            feat = self.get_aug_feature(index).astype("float")
+
+        return LavidaPrefetchedData(
+            index,
+            Image.open(self.dataset.get_image_fileobj(sampled_nn)),
+            feat,
+            sampled_nn,
+        )
 
     def __getitem__(self, idx: int):
         if not self.feature_augmentation or np.random.randint(2):
@@ -638,12 +673,14 @@ def get_dataset_lavida_hdf5(
     print(f"Images: {images_labels_fpath}")
     print(f"Features: {features_fpath}")
     print(f"NNs: {nns_fpath}")
+    from data_utils.async_dataset import async_reader, ImageLoadingIterableDataset, ImageLoadingIndexedDataset, TrainingSampler
     image_transform_list = []
     if augment:
         image_transform_list.append(transforms.RandomHorizontalFlip())
     transform = LavidaHDF5Transform(
         image_transform=transforms.Compose(image_transform_list)
     )
+    # image: -1.0..1.0
     from data_utils.async_dataset import async_reader, ImageLoadingIterableDataset
 
     dataset_lavida_hdf5 = LavidaHDF5Dataset(
@@ -656,13 +693,13 @@ def get_dataset_lavida_hdf5(
     if not is_async:
         return dataset_lavida_hdf5
 
-    sampler = get_lavida_sampler(dataset_lavida_hdf5, shuffle=shuffle)
-    dataset_rawdata_labels = async_reader(
-        dataset_lavida_hdf5,
-        sampler=sampler,
-        max_prefetch=32,
-    )
-    dataset = ImageLoadingIterableDataset(dataset_rawdata_labels, transform)
+    #sampler = get_lavida_sampler(dataset_lavida_hdf5, shuffle=shuffle)
+    #dataset_rawdata_labels = async_reader(
+    #    dataset_lavida_hdf5,
+    #    sampler=sampler,
+    #    max_prefetch=32,
+    #)
+    dataset = ImageLoadingIndexedDataset(dataset_lavida_hdf5, transform)
     return dataset
 
 
@@ -734,11 +771,16 @@ def get_dataset_lavida(
         transforms.Resize(resolution, transforms.InterpolationMode.BICUBIC),
         transforms.CenterCrop(resolution),
         transforms.ToTensor(),
+        # ToTensor: HWC [0..255] => CHW [0, 1]
         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
     ]
+    # image [-1; 1]
     if augment:
         transform_list.append(transforms.RandomHorizontalFlip())
-    transform = transforms.Compose(transform_list)
+    #transform = transforms.Compose(transform_list)
+    transform = LavidaHDF5Transform(
+        image_transform=transforms.Compose(transform_list)
+    )
 
     from data_utils.async_dataset import async_reader, ImageLoadingIterableDataset, ImageLoadingIndexedDataset, TrainingSampler
     import large_vision_dataset.factory as lavida_factory
@@ -794,13 +836,35 @@ def get_dataloader_lavida(
     # Prepare loader; the loaders list is for forward compatibility with
     # using validation / test splits.
     # if use_multiepoch_sampler:
+    #loader = DataLoader(
+    #    dataset,
+    #    batch_size=batch_size,
+    #    num_workers=num_workers,
+    #    pin_memory=pin_memory,
+    #    drop_last=drop_last,
+    #    shuffle=shuffle,
+    #)
+    #return loader
+    if world_size == -1:
+        sampler = None
+    else:
+        sampler = DistributedSampler(
+            dataset, num_replicas=world_size, rank=rank
+        )
+        shuffle = False
+    loader_kwargs = {
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+        "drop_last": drop_last,
+    }
+    print("Loader workers?", loader_kwargs, " with shuffle?", shuffle)
     loader = DataLoader(
         dataset,
         batch_size=batch_size,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-        drop_last=drop_last,
         shuffle=shuffle,
+        sampler=sampler,
+        worker_init_fn=seed_worker if use_checkpointable_sampler else None,
+        **loader_kwargs
     )
     return loader
 
