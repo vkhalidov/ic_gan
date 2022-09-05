@@ -564,6 +564,7 @@ class LavidaILSVRCDataset(data.Dataset):
 
     def prefetch_data(self, index):
         from PIL import Image
+        from io import BytesIO
         nns = self.get_nns(index)
         sampled_nn = np.random.choice(nns)
         hflip = np.random.randint(2) == 1
@@ -574,7 +575,7 @@ class LavidaILSVRCDataset(data.Dataset):
 
         return LavidaPrefetchedData(
             index,
-            Image.open(self.dataset.get_image_fileobj(sampled_nn)),
+            Image.open(BytesIO(self.dataset.get_image_data(sampled_nn))),
             feat,
             sampled_nn,
         )
