@@ -8,6 +8,7 @@
 # Copyright (c) 2019 Andy Brock
 
 # MIT License
+from io import BytesIO
 import sys
 import os
 import numpy as np
@@ -537,15 +538,28 @@ class LavidaILSVRCDataset(data.Dataset):
         self.dataset = lavida_dataset
         n_samples = len(lavida_dataset)
         print(f"LavidaILSVRCDataset, features_arr: {n_samples}x{features_dim}")
-        self.features_arr = np.memmap(features_fpath, dtype=np.float32, mode="r", shape=(n_samples, features_dim))
-        self.aug_features_arr = np.memmap(aug_features_fpath, dtype=np.float32, mode="r", shape=(n_samples, features_dim))
-        self.nn_arr = np.memmap(nn_fpath, dtype=np.uint32, mode="r", shape=(n_samples, nn_count))
-        self.nn_scores_arr = np.memmap(nn_scores_fpath, dtype=np.float32, mode="r", shape=(n_samples, nn_count))
+        self.features_arr = self._load_np_array_or_raw_data(features_fpath, n_samples, features_dim, np.float32)
+        self.aug_features_arr = self._load_np_array_or_raw_data(aug_features_fpath, n_samples, features_dim, np.float32)
+        self.nn_arr = self._load_np_array_or_raw_data(nn_fpath, n_samples, nn_count, np.uint32)
+        if self.nn_arr.shape[1] > nn_count:
+            self.nn_arr = self.nn_arr[:, :nn_count]
+        print(f"LavidaILSVRCDataset, nn_arr: {self.nn_arr.shape} {self.nn_arr.dtype}")
+        self.nn_scores_arr = self._load_np_array_or_raw_data(nn_scores_fpath, n_samples, nn_count, np.float32)
+        if self.nn_scores_arr.shape[1] > nn_count:
+            self.nn_scores_arr = self.nn_scores_arr[:, :nn_count]
+        print(f"LavidaILSVRCDataset, nn_scores_arr: {self.nn_scores_arr.shape} {self.nn_scores_arr.dtype}")
         self.num_instance_conditionings = num_instance_conditionings
         self.feature_augmentation = feature_augmentation
 
+    def _load_np_array_or_raw_data(self, fpath, N, D, dtype):
+        if os.path.splitext(fpath)[1] == ".npy":
+            return np.load(fpath, mmap_mode="r")
+        elif os.path.splitext(fpath)[1] == ".dat":
+            return np.memmap(fpath, dtype=dtype, mode="r", shape=(N, D))
+        raise ValueError(f"Unknown file type: {fpath}")
+
     def get_image_fileobj(self, idx):
-        return self.dataset.get_image_fileobj(idx)
+        return BytesIO(self.dataset.get_image_data(idx))
 
     def get_image_filepath(self, idx):
         return self.dataset.get_image_path(idx)
@@ -557,6 +571,7 @@ class LavidaILSVRCDataset(data.Dataset):
         return self.aug_features_arr[idx]
 
     def get_nns(self, idx):
+        #nns = self.nn_arr[idx]
         return self.nn_arr[idx]
 
     def get_nn_scores(self, idx):
@@ -567,6 +582,8 @@ class LavidaILSVRCDataset(data.Dataset):
         from io import BytesIO
         nns = self.get_nns(index)
         sampled_nn = np.random.choice(nns)
+        #print("nns:", type(nns),  "sampled_nn", type(sampled_nn), sampled_nn)
+        assert np.all(sampled_nn < len(self.dataset)), f"{index}: {nns}, {sampled_nn}, {np.where(nns >= len(self.dataset))}"
         hflip = np.random.randint(2) == 1
         if self.feature_augmentation and hflip:
             feat = self.get_feature(index).astype("float")
@@ -703,6 +720,12 @@ def get_dataset_lavida_hdf5(
     dataset = ImageLoadingIndexedDataset(dataset_lavida_hdf5, transform)
     return dataset
 
+def _get_np_array_or_memmap_fpath(folder, fname):
+    if os.path.exists(os.path.join(folder, fname + ".npy")):
+        return os.path.join(folder, fname + ".npy")
+    elif os.path.exists(os.path.join(folder, fname + ".dat")):
+        return os.path.join(folder, fname + ".dat")
+    raise ValueError(f"Could not find file {fname} in folder {folder}")
 
 def get_dataset_lavida(
     dataset_spec,
@@ -743,13 +766,13 @@ def get_dataset_lavida(
     **kwargs
 ):
     print("get_dataset_lavida", locals())
-    features_fpath = os.path.join(auxdata_dir, "features_nohflip.dat")
+    features_fpath = _get_np_array_or_memmap_fpath(auxdata_dir, "features_nohflip")
     print("features_fpath", features_fpath)
-    aug_features_fpath = os.path.join(auxdata_dir, "features_hflip.dat")
+    aug_features_fpath = _get_np_array_or_memmap_fpath(auxdata_dir, "features_hflip")
     print("aug_features_fpath", aug_features_fpath)
-    nn_fpath = os.path.join(auxdata_dir, "nns.dat")
+    nn_fpath = _get_np_array_or_memmap_fpath(auxdata_dir, "nns")
     print("nn_fpath", nn_fpath)
-    nn_scores_fpath = os.path.join(auxdata_dir, "nn_scores.dat")
+    nn_scores_fpath = _get_np_array_or_memmap_fpath(auxdata_dir, "nn_scores")
     print("nn_scores_fpath", nn_scores_fpath)
     if copy_locally and local_rank == 0:
         auxdata_tmp_dir = os.path.join(tmp_dir, "auxdata")
@@ -787,6 +810,7 @@ def get_dataset_lavida(
     import large_vision_dataset.factory as lavida_factory
     print(f"Creating lavida dataset {dataset_spec}")
     dataset_lavida = lavida_factory.make_dataset_with_transform(dataset_spec)
+    print(f"Lavida dataset: size={len(dataset_lavida)}")
     dataset_lavida_ex = LavidaILSVRCDataset(dataset_lavida, features_fpath, aug_features_fpath, nn_fpath, nn_scores_fpath, features_dim, nn_count=k_nn, num_instance_conditionings=num_instance_conditionings, feature_augmentation=feature_augmentation)
     if not is_async:
         return dataset_lavida_ex
