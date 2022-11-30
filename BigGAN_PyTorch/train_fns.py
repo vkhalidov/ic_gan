@@ -76,6 +76,8 @@ def GAN_training_function(
                     z_, labels_g = sampled_cond
                 elif features is not None:
                     z_, f_g = sampled_cond
+                #print("z", type(z_))
+                #print("f_g", type(f_g), torch.any(torch.isnan(f_g)))
                 # Tensors to device
                 if labels_g is not None:
                     labels_g = (
