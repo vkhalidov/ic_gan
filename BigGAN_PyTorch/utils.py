@@ -854,7 +854,7 @@ def prepare_parser():
         type=str,
         default="%3.3e",
         help="What style to use when logging training metrics?"
-        "One of: %#.#f/ %#.#e (float/exp, text),"
+        "One of: %%#.#f/ %%#.#e (float/exp, text),"
         "pickle (python pickle),"
         "npz (numpy zip),"
         "mat (MATLAB .mat file) (default: %(default)s)",
