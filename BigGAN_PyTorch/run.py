@@ -66,6 +66,7 @@ if __name__ == "__main__":
             #mem=256000,
             time=3200,
             job_name=config["experiment_name"],
+            exclude="a100-st-p4de24xlarge-10",
             exclusive=True if config["n_gpus_per_node"] == 8 else False,
         )
 
