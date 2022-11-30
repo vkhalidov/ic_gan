@@ -59,14 +59,15 @@ if __name__ == "__main__":
         executor.update_parameters(
             gpus_per_node=config["n_gpus_per_node"],
             partition=config["partition"],
-            #constraint="volta32gb",
+            constraint="volta32gb",
             nodes=config["n_nodes"],
             ntasks_per_node=config["n_gpus_per_node"],
-            cpus_per_task=12,
-            #mem=256000,
+            #cpus_per_task=12,
+            cpus_per_task=10,
+            mem=0,
             time=3200,
             job_name=config["experiment_name"],
-            exclude="a100-st-p4de24xlarge-10",
+            #exclude="a100-st-p4de24xlarge-10",
             exclusive=True if config["n_gpus_per_node"] == 8 else False,
         )
 
