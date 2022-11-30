@@ -708,9 +708,11 @@ class ImageLoadingIndexedDataset(data.Dataset):
             if feature_augmentation and hflip:
                 #feats.append(self.dataset.dataset.dataset.get_aug_feature(idx).reshape((1, -1)))
                 feats.append(self.dataset.get_aug_feature(idx).reshape((1, -1)))
+                #print(f"feature hflip {idx}, shape={feats[-1].shape}, has_nan={np.any(np.isnan(feats[-1]))}")
             else:
                 #feats.append(self.dataset.dataset.dataset.get_feature(idx).reshape(1, -1))
                 feats.append(self.dataset.get_feature(idx).reshape(1, -1))
+                #print(f"feature nohflip {idx}, shape={feats[-1].shape}, has_nan={np.any(np.isnan(feats[-1]))}")
         instance_features = np.concatenate(feats)
 
         #hflip = np.random.randint(2, size=len(sel_idxs))
