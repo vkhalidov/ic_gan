@@ -139,6 +139,8 @@ def train(rank, world_size, config, dist_url):
     torch.backends.cudnn.benchmark = True
     if config["deterministic_run"]:
         torch.backends.cudnn.deterministic = True
+        torch.use_deterministic_algorithms(True)
+        torch.backends.cudnn.benchmark = False
 
     # Import the model--this line allows us to dynamically select different files.
     model = __import__(config["model"])
@@ -230,11 +232,14 @@ def train(rank, world_size, config, dist_url):
             output_device=local_rank,
             find_unused_parameters=True,
         )
+        print("After D DDP ")
 
     # If loading from a pre-trained model, load weights
-    print("Loading weights...")
+    print("Loading weights \"{}\" from {}...".format(config["load_weights"], config["weights_root"]))
     if config["ddp_train"]:
+        print("barrier...")
         dist.barrier()
+        print("barrier done.")
         map_location = device
     else:
         map_location = None
@@ -252,6 +257,27 @@ def train(rank, world_size, config, dist_url):
         G_optim=optimizer_G,
         D_optim=optimizer_D,
     )
+
+    print("Loaded weights.")
+    if config["ddp_train"]:
+        print("barrier...")
+        dist.barrier()
+        print("barrier done.")
+
+    #if config["debug"] and rank == 0:
+    #    utils.save_weights(
+    #        G,
+    #        D,
+    #        state_dict,
+    #        config["weights_root"],
+    #        experiment_name,
+    #        name_suffix="init",
+    #        G_ema=G_ema if config["ema"] else None,
+    #        embedded_optimizers=False,
+    #        G_optim=optimizer_G,
+    #        D_optim=optimizer_D,
+    #    )
+
 
     # wrapper class
     GD = model.G_D(G, D, optimizer_G=optimizer_G, optimizer_D=optimizer_D)
@@ -475,14 +501,17 @@ def train(rank, world_size, config, dist_url):
         s = time.time()
         print("Before iteration, dataloader length", len(train_loader))
         for i, batch in enumerate(pbar):
-            # if i> 5:
-            #     break
+            # if i > 100:
+            #    break
             in_label, in_feat = None, None
             if config["instance_cond"] and config["class_cond"]:
                 x, in_label, in_feat, _ = batch
             elif config["instance_cond"]:
                 x = batch["img"]
                 in_feat = batch["feats"]
+                if config["debug"]:
+                    print("DEBUG batch indices: {}".format(batch["idx"]))
+                    print("DEBUG NN indices: {}".format(batch["nn"]))
             elif config["class_cond"]:
                 x, in_label = batch
                 if config["constant_conditioning"]:
@@ -504,7 +533,7 @@ def train(rank, world_size, config, dist_url):
             if config["ema"]:
                 G_ema.train()
 
-            metrics = train(x, in_label, in_feat)
+            metrics = train(i, x, in_label, in_feat, rank)
             #   print('After training step ', time.time() - s_stratified)
             #  s_stratified = time.time()
             if rank == 0:

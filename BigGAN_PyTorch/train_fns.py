@@ -16,6 +16,8 @@ import torch
 import utils
 import losses
 
+from utils import save_data
+
 
 # Dummy training function for debugging
 def dummy_training_function():
@@ -37,7 +39,7 @@ def GAN_training_function(
     device="cuda",
     batch_size=0,
 ):
-    def train(x, y=None, features=None):
+    def train(i, x, y=None, features=None, rank=None):
         if embedded_optimizers:
             G.optim.zero_grad()
             D.optim.zero_grad()
@@ -76,8 +78,6 @@ def GAN_training_function(
                     z_, labels_g = sampled_cond
                 elif features is not None:
                     z_, f_g = sampled_cond
-                #print("z", type(z_))
-                #print("f_g", type(f_g), torch.any(torch.isnan(f_g)))
                 # Tensors to device
                 if labels_g is not None:
                     labels_g = (
@@ -86,6 +86,13 @@ def GAN_training_function(
                 if f_g is not None:
                     f_g = f_g[:batch_size].to(device, non_blocking=True)
                 z_ = z_[:batch_size].to(device, non_blocking=True)
+                if config["debug"] and rank == 0:
+                    data_name = f"D_cond_{i:04d}_{step_index:02d}_{accumulation_index:02d}"
+                    save_data(config, "debug", data_name, {"z": z_, "f": f_g})
+                    print("D z", type(z_), z_.shape, z_.dtype, z_)
+                    print("D f_g", type(f_g), f_g.shape, f_g.dtype, f_g)
+                    #data_name = f"D_acc_{i:04d}_{step_index:02d}_{accumulation_index:02d}"
+                    #save_data(config, "debug", data_name, {"G": G.state_dict(), "D": D.state_dict()})
                 # Obtain discriminator scores
                 D_fake, D_real = GD(
                     z_,
@@ -103,6 +110,9 @@ def GAN_training_function(
                 # Compute components of D's loss, average them, and divide by
                 # the number of gradient accumulations
                 D_loss_real, D_loss_fake = losses.discriminator_loss(D_fake, D_real)
+                if config["debug"] and rank == 0:
+                    data_name = f"D_loss_{i:04d}_{step_index:02d}_{accumulation_index:02d}"
+                    save_data(config, "debug", data_name, {"D_loss_real": D_loss_real, "D_loss_fake": D_loss_fake})
                 D_loss = (D_loss_real + D_loss_fake) / float(
                     config["num_D_accumulations"]
                 )
@@ -119,6 +129,9 @@ def GAN_training_function(
                 D.optim.step()
             else:
                 GD.optimizer_D.step()
+            if config["debug"] and rank == 0:
+                data_name = f"D_{i:04d}_{step_index:02d}"
+                save_data(config, "debug", data_name, {"G": G.state_dict(), "D": D.state_dict()})
 
         # Optionally toggle "requires_grad"
         if config["toggle_grads"]:
@@ -149,6 +162,11 @@ def GAN_training_function(
             if f_g is not None:
                 f_g = f_g.to(device, non_blocking=True)
             z_ = z_.to(device, non_blocking=True)
+            if config["debug"] and rank == 0:
+                data_name = f"G_cond_{i:04d}_{accumulation_index:02d}"
+                save_data(config, "debug", data_name, {"z": z_, "f": f_g})
+                print("G z", type(z_), z_.shape, z_.dtype, z_)
+                print("G f_g", type(f_g), f_g.shape, f_g.dtype, f_g)
             # Obtain discriminator scores
             D_fake = GD(
                 z_,
@@ -162,6 +180,9 @@ def GAN_training_function(
             G_loss = losses.generator_loss(D_fake) / float(
                 config["num_G_accumulations"]
             )
+            if config["debug"] and rank == 0:
+                data_name = f"G_loss_{i:04d}_{step_index:02d}"
+                save_data(config, "debug", data_name, {"G_loss": G.state_dict()})
             G_loss.backward()
             counter += 1
 
@@ -180,6 +201,9 @@ def GAN_training_function(
             G.optim.step()
         else:
             GD.optimizer_G.step()
+        if config["debug"] and rank == 0:
+            data_name = f"G_{i:04d}_{step_index:02d}"
+            save_data(config, "debug", data_name, {"G": G.state_dict(), "D": D.state_dict()})
 
         # If we have an ema, update it, regardless of if we test with it or not
         if config["ema"]:

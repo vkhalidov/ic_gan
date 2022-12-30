@@ -847,6 +847,13 @@ def prepare_parser():
         default=False,
         help="Resume training? (default: %(default)s)",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        default=False,
+        help="Debug run? (default: %(default)s)",
+    )
+
 
     ### Log stuff ###
     parser.add_argument(
@@ -1116,6 +1123,25 @@ def toggle_grad(model, on_or_off):
 # is a list of strings or Nones.
 def join_strings(base_string, strings):
     return base_string.join([item for item in strings if item])
+
+
+def _maybe_create_dir(dirpath: str):
+    if not os.path.exists(dirpath):
+        os.makedirs(dirpath, exist_ok = True)
+
+
+def save_data(config, data_type_name: str, data_name: str, data):
+    root = config["base_root"]
+    experiment_name = (
+        config["experiment_name"]
+        if config["experiment_name"]
+        else name_from_config(config)
+    )
+    dirpath = os.path.join(root, data_type_name, experiment_name)
+    _maybe_create_dir(dirpath)
+    data_path = os.path.join(dirpath, f"{data_name}.pth")
+    torch.save(data, data_path)
+    print(f"Saved data {data_type_name}:{data_name} into {data_path}")
 
 
 # Save a model's weights, optimizer, and the state_dict
